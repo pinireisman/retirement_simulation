@@ -3,4 +3,4 @@ pandas
 matplotlib
 openpyxl
 pyqt5
-
+plotly
