@@ -341,7 +341,8 @@ def plot_cash_flow(results: Dict, interactive: bool = True):
         fig.add_scatter(x=ages, y=net, mode="lines", name="Net cash‑flow", line=dict(color="black"))
         ruin = results["summary"]["ruin_probability"]
         title = (f"Segmented annual cash‑flow (real ₪) - ruin probability: {ruin:.3%} "
-                 f"success: {1 - ruin:.3%}")
+                 f"success: {1 - ruin:.3%} "
+                 f"market: {MARKET} scenario: {results['input_file']}")
         fig.update_layout(barmode="relative",
                           title=title,
                           xaxis_title="Age", yaxis_title="₪ per year")
@@ -481,6 +482,7 @@ def _cli():
     print("Ruin probability:", f"{result['summary']['ruin_probability']:.3%}")
 
     if args.plot:
+        result["input_file"] = args.input
         plot_cash_flow(result, interactive=True)
 
 if __name__ == "__main__":
