@@ -469,7 +469,9 @@ def read_scenario_data(path):
 
 def _cli():
     parser = argparse.ArgumentParser(description="Retirement Monte‑Carlo simulator")
-    parser.add_argument("input", type=str, help="Path to the scenario data .xlsx file")
+    parser.add_argument("input", type=str, nargs="?", default="./scenario_data_example.xlsx",
+                        help="Path to the scenario data .xlsx file (default: ./scenario_data_example.xlsx)")
+
     parser.add_argument("--plot", action="store_true", help="Show interactive cash‑flow plot")
     args = parser.parse_args()
 
