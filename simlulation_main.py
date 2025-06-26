@@ -469,10 +469,11 @@ def read_scenario_data(path):
 
 def _cli():
     parser = argparse.ArgumentParser(description="Retirement Monte‑Carlo simulator")
+    parser.add_argument("input", type=str, help="Path to the scenario data .xlsx file")
     parser.add_argument("--plot", action="store_true", help="Show interactive cash‑flow plot")
     args = parser.parse_args()
 
-    scenario_data = read_scenario_data("/Users/pinir/personal/scenario_data.xlsx")
+    scenario_data = read_scenario_data(args.input)
     params = SimulationParams(scenario_data=scenario_data)
     result = run_simulation(params)
     print("Ruin probability:", f"{result['summary']['ruin_probability']:.3%}")
