@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Callable, List, Optional
-from configuration import growth_mean_by_market, MARKET, growth_sd_by_market, real_return_mean_by_market, \
-    real_return_sd_by_market
+from configuration import housing_growth_mean_by_market, MARKET, ANNUAL, housing_growth_sd_by_market, portfolio_real_return_mean_by_market, \
+    portfolio_real_return_sd_by_market
 
 
 ###############################################################################
@@ -29,8 +29,8 @@ class Property:
     start_age: int  # first year property exists
     initial_value: float  # market value at start_age (real ₪)
     rent_annual: float  # net rent added to cash‑flow each year ≥ start_age
-    growth_mean: float = growth_mean_by_market[MARKET]  # long‑run real appreciation µ
-    growth_sd: float = growth_sd_by_market[MARKET]  # annual real volatility σ
+    growth_mean: float = housing_growth_mean_by_market[MARKET]  # long‑run real appreciation µ
+    growth_sd: float = housing_growth_sd_by_market[MARKET]  # annual real volatility σ
     label: str = ""
 
 
@@ -55,15 +55,16 @@ class SimulationParams:
         # Horizon --------------------------------------------------------------
         self.start_age: int = scenario_data['start_age']
         self.end_age: int = scenario_data['end_age']
+        self.annual = ANNUAL  # True if annual, False if monthly
 
         # Portfolio ------------------------------------------------------------
         self.initial_portfolio: float = scenario_data['initial_portfolio']
-        self.real_return_mean: float = real_return_mean_by_market[MARKET]
-        self.real_return_sd: float = real_return_sd_by_market[MARKET]
+        self.real_return_mean: float = portfolio_real_return_mean_by_market[MARKET]
+        self.real_return_sd: float = portfolio_real_return_sd_by_market[MARKET]
 
         # Monte‑Carlo ----------------------------------------------------------
         self.n_paths: int = 10_000
-        self.random_seed: Optional[int] = 10  # 42
+        self.random_seed: Optional[int] = 42  # some random seed for reproducibility
 
         # Core spending (real) -------------------------------------------------
         self.spending_bands: List[Band] = []
