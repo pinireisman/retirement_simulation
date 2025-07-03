@@ -9,7 +9,7 @@ portfolio_real_return_mean_by_market = {
 portfolio_real_return_sd_by_market = {
     "US": 0.12,
     "UK": 0.20,
-    "IL": 0.12  # 0.155 (Gemini) 0.117 (chatgpt), 0.23 for high volatility
+    "IL": 0.10  # 0.155 (Gemini) 0.117 (chatgpt), 0.23 for high volatility
 }
 housing_growth_mean_by_market = {
     "US": 0.01,
