@@ -31,7 +31,12 @@ def run_simulation(params: SimulationParams) -> Dict[str, object]:
 
         spend = np.array([params.spending_fn()(a) for a in ages])
         incomes = np.array([params.income_fn()(a) for a in ages])
-        lump_map = {lump.age: lump.amount for lump in params.lumps}
+        lump_map = {}
+        for lump in params.lumps:
+            if lump.age in lump_map:
+                lump_map[lump.age] += lump.amount
+            else:
+                lump_map[lump.age] = lump.amount
 
         bal_over_age = np.full((years, params.n_paths), 0.0)
         prop_over_age = np.full((years, params.n_paths), 0.0)
