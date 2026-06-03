@@ -1,7 +1,8 @@
 from dataclasses import dataclass
 from typing import Callable, List, Optional
-from configuration import housing_growth_mean_by_market, MARKET, ANNUAL, housing_growth_sd_by_market, portfolio_real_return_mean_by_market, \
-    portfolio_real_return_sd_by_market
+from configuration import housing_growth_mean_by_market, MARKET, ANNUAL, housing_growth_sd_by_market, \
+    portfolio_real_return_mean_by_market, \
+    portfolio_real_return_sd_by_market, FAT_TAIL_DF
 
 
 ###############################################################################
@@ -61,6 +62,7 @@ class SimulationParams:
         self.initial_portfolio: float = scenario_data['initial_portfolio']
         self.real_return_mean: float = portfolio_real_return_mean_by_market[MARKET]
         self.real_return_sd: float = portfolio_real_return_sd_by_market[MARKET]
+        self.fat_tails_df: float = FAT_TAIL_DF
 
         # Monte‑Carlo ----------------------------------------------------------
         self.n_paths: int = 10_000
@@ -74,16 +76,15 @@ class SimulationParams:
                                             row.spending_comment))
 
         # Extra travel allowance --------------------------------
-
-        self.travel_annual: float = scenario_data['travel'].travel_amount_annual.iloc[
-            0]  # this is beyond 40K that is in the spending_bands
-        self.travel_annual_start: int = scenario_data['travel'].travel_age_from.iloc[0]
-        self.travel_annual_end: int = scenario_data['travel'].travel_age_to.iloc[0]
-        if self.travel_annual:
-            self.spending_bands.append(Band(self.travel_annual_start,
-                                            self.travel_annual_end,
-                                            self.travel_annual,
-                                            "extra travel allowance"))
+        for i, row in scenario_data['travel'].iterrows():
+            if row.travel_amount_annual:
+                print(f"Adding travel band: {row.travel_age_from}-{row.travel_age_to} with annual amount {row.travel_amount_annual}")
+                self.spending_bands.append(Band(
+                    row.travel_age_from,
+                    row.travel_age_to,
+                    row.travel_amount_annual,
+                    "extra travel allowance"
+                ))
 
         # Income bands (real); overlaps add up -------------------------------
         self.income_bands: List[Band] = []

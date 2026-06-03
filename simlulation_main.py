@@ -20,7 +20,19 @@ from visualization import plot_cash_flow
 ###############################################################################
 # Simulation engine
 ###############################################################################
-
+def sample_real_returns(
+    n,
+    mean=0.05,
+    std=0.16,
+    df=5,          # lower = fatter tails. try 4–7
+    rng=None
+):
+    if rng is None:
+        rng = np.random.default_rng()
+    # Student-t has variance df/(df-2), so rescale to target std
+    raw = rng.standard_t(df=df, size=n)
+    scaled = raw / np.sqrt(df / (df - 2))
+    return mean + std * scaled
 
 def run_simulation(params: SimulationParams) -> Dict[str, object]:
     annual = params.annual
@@ -42,7 +54,12 @@ def run_simulation(params: SimulationParams) -> Dict[str, object]:
         prop_over_age = np.full((years, params.n_paths), 0.0)
         bal = np.full(params.n_paths, params.initial_portfolio)
         ruined = np.zeros(params.n_paths, dtype=bool)
-        port_ret = rng.normal(params.real_return_mean, params.real_return_sd,
+        if params.fat_tails_df:
+            # use standard_t to use fat tails
+            print(f"using standard_t distribution with mean: {params.real_return_mean} std: {params.real_return_sd}, df: {params.fat_tails_df}")
+            port_ret = sample_real_returns((params.n_paths, years), params.real_return_mean, params.real_return_sd, params.fat_tails_df)
+        else:
+            port_ret = rng.normal(params.real_return_mean, params.real_return_sd,
                               size=(params.n_paths, years))
 
         prop_vals = [np.zeros(params.n_paths) for _ in params.properties]
@@ -52,6 +69,8 @@ def run_simulation(params: SimulationParams) -> Dict[str, object]:
         mean_wr_list = []  # store mean withdrawal rate per year
         max_wr_list = []  # store max withdrawal rate per year
         mean_withdraw_val_list = []
+
+        ruin_year = np.full(params.n_paths, -1)  # -1 means not ruined
 
         for i, age in enumerate(ages):
             start_bal = bal.copy()
@@ -76,13 +95,15 @@ def run_simulation(params: SimulationParams) -> Dict[str, object]:
             mean_withdraw_val_list.append(withdraw_vals.mean())
 
             # ruin & growth
+            just_ruined = (bal <= 0) & (~ruined)
+            ruin_year[just_ruined] = age
             ruined |= bal <= 0
             bal[ruined] = 0.0
             bal[~ruined] *= (1 + port_ret[~ruined, i])
             bal_over_age[i, :] = bal.copy()
             # property growth
             for j, p in enumerate(params.properties):
-                if age == p.start_age:
+                if age >= p.start_age and prop_vals[j].sum() == 0:  # only add initial value at the first year it becomes active
                     prop_vals[j] += p.initial_value
                 active = prop_vals[j] > 0
                 prop_vals[j][active] *= (1 + prop_ret[j][active, i])
@@ -101,6 +122,26 @@ def run_simulation(params: SimulationParams) -> Dict[str, object]:
             "estate_pct25": p_est[0], "estate_median": p_est[1], "estate_pct75": p_est[2],
         }
 
+        # Calculate ruin distribution by year
+        ruined_paths, = np.nonzero(ruined)
+        ruin_years_for_ruined = ruin_year[ruined_paths]
+        ruin_by_year_counts = {}
+        for y in np.sort(np.unique(ruin_years_for_ruined)):
+            ruin_by_year_counts[int(y)] = int(np.sum(ruin_years_for_ruined == y))
+
+        out_ruin_distribution = [(year, count) for year, count in ruin_by_year_counts.items()]
+        out_ruin_distribution.sort(key=lambda x: x[0])
+
+        # Logging ruined tracks
+        ruin_tracks_log = []
+        for idx in np.where(ruined)[0]:
+            ruin_info = {
+                "path_index": int(idx),
+                "ruin_year": int(ruin_year[idx]),
+                "portfolio_sequence": bal_over_age[:, idx].tolist()
+            }
+            ruin_tracks_log.append(ruin_info)
+
         return {
             "summary": summary,
             "final_portfolio": bal,
@@ -112,9 +153,11 @@ def run_simulation(params: SimulationParams) -> Dict[str, object]:
             "ages": ages,
             "params": params,
             "ruined": ruined,
+            "ruin_distribution_by_year": out_ruin_distribution,
             "bal_over_age": bal_over_age,
             "prop_over_age": prop_over_age,
             "estate_final": estate,  # total estate at the end of the simulation
+            "ruin_tracks_log": ruin_tracks_log,
         }
     else:  # monthly simulation
 
@@ -139,6 +182,7 @@ def run_simulation(params: SimulationParams) -> Dict[str, object]:
         prop_ret = [rng.normal(p.growth_mean / 12, p.growth_sd / np.sqrt(12), size=(params.n_paths, n_months))
                     for p in params.properties]
 
+        ruin_month = np.full(params.n_paths, -1)  # -1 means not ruined
         for i, month in enumerate(months):
             start_bal = bal.copy()
             # Cash-flows before growth
@@ -156,6 +200,8 @@ def run_simulation(params: SimulationParams) -> Dict[str, object]:
             withdrawal = np.where(cash_delta < 0, -cash_delta, 0.0)
             with np.errstate(divide='ignore', invalid='ignore'):
                 wrate = np.where(start_bal > 0, withdrawal / start_bal, 0.0)
+            just_ruined = (bal <= 0) & (~ruined)
+            ruin_month[just_ruined] = month
             ruined |= bal <= 0
             bal[ruined] = 0.0
             bal[~ruined] *= (1 + monthly_ret[~ruined, i])  # Monthly growth
@@ -172,6 +218,27 @@ def run_simulation(params: SimulationParams) -> Dict[str, object]:
         prop_tot = sum(prop_vals)
         estate = bal + prop_tot
 
+        # Calculate ruin distribution by year (from month)
+        ruined_paths, = np.nonzero(ruined)
+        ruin_months_for_ruined = ruin_month[ruined_paths]
+        ruin_years_for_ruined = ruin_months_for_ruined // 12
+        ruin_by_year_counts = {}
+        for y in np.sort(np.unique(ruin_years_for_ruined)):
+            ruin_by_year_counts[int(y)] = int(np.sum(ruin_years_for_ruined == y))
+
+        out_ruin_distribution = [(year, count) for year, count in ruin_by_year_counts.items()]
+        out_ruin_distribution.sort(key=lambda x: x[0])
+
+        # Logging ruined tracks
+        ruin_tracks_log = []
+        for idx in np.where(ruined)[0]:
+            ruin_info = {
+                "path_index": int(idx),
+                "ruin_month": int(ruin_month[idx]),
+                "portfolio_sequence": bal_over_month[:, idx].tolist()
+            }
+            ruin_tracks_log.append(ruin_info)
+
         summary = {
             "ruin_probability": ruined.mean(),
             "final_portfolio": bal,
@@ -179,19 +246,16 @@ def run_simulation(params: SimulationParams) -> Dict[str, object]:
             "estate_total": estate,
         }
 
-    return {
-        "summary": summary,
-        "bal_over_month": bal_over_month,
-        "prop_over_month": prop_over_month,
-        "estate_final": estate,
-        "final_portfolio": bal,
-        "final_property": prop_tot,
-        "estate_total": estate,
-        # "ages": ages,
-        "months": months,
-        "params": params,
-        "ruined": ruined,
-    }
+        return {
+            "summary": summary,
+            "bal_over_month": bal_over_month,
+            "prop_over_month": prop_over_month,
+            "estate_final": estate,
+            "final_portfolio": bal,
+            "final_property": prop_tot,
+            "estate_total": estate,
+            "ruin_tracks_log": ruin_tracks_log,
+        }
 
 
 ###############################################################################
@@ -242,6 +306,28 @@ def _cli():
 
     result = run_simulation(params)
     print("Ruin probability:", f"{result['summary']['ruin_probability']:.3%}")
+    # Print ruin tracks log
+    ruin_tracks_log = result.get("ruin_tracks_log", [])
+    if ruin_tracks_log:
+        print("\nTracks that ended in ruin:")
+        for track in ruin_tracks_log:
+            if 'ruin_year' in track:
+                print(f"Path {track['path_index']} ruined in year {track['ruin_year']}. Portfolio sequence: {track['portfolio_sequence']}")
+            elif 'ruin_month' in track:
+                print(f"Path {track['path_index']} ruined in month {track['ruin_month']}. Portfolio sequence: {track['portfolio_sequence']}")
+        # Print distribution of ruined paths per year/month
+        ruin_time_key = 'ruin_year' if 'ruin_year' in ruin_tracks_log[0] else 'ruin_month'
+        ruin_time_counts = {}
+        for track in ruin_tracks_log:
+            time = track[ruin_time_key]
+            if time not in ruin_time_counts:
+                ruin_time_counts[time] = 0
+            ruin_time_counts[time] += 1
+        print("\nDistribution of ruined paths per {} (sorted):".format('year' if ruin_time_key == 'ruin_year' else 'month'))
+        for time in sorted(ruin_time_counts):
+            print(f"{ruin_time_key.replace('ruin_', '').capitalize()} {time}: {ruin_time_counts[time]} paths ruined")
+    else:
+        print("\nNo tracks ended in ruin.")
 
     if args.plot:
         result["input_file"] = args.input
