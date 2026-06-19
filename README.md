@@ -4,6 +4,30 @@ A Monte-Carlo simulation tool for retirement financial planning, working in **re
 
 ---
 
+## Setup
+
+### 1. Create the virtual environment and install dependencies
+
+```bash
+./setup_venv.sh
+```
+
+This creates a `.venv/` directory, upgrades pip, and installs everything from `requirements.txt`. You only need to run this once (or again after adding new dependencies).
+
+### 2. Activate the virtual environment
+
+```bash
+source .venv/bin/activate
+```
+
+Your prompt will change to show `(.venv)`. All subsequent `python` / `pip` commands in that shell will use the isolated environment.
+
+### 3. VS Code
+
+Open the workspace and VS Code will automatically use `.venv/bin/python` (configured in `.vscode/settings.json`). The launch configuration already points to this interpreter, so debugging works out of the box.
+
+---
+
 ## How to Run
 
 ```bash
