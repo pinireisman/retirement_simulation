@@ -63,6 +63,13 @@ def get_ruin_explanation(ruin_prob):
 # Cash-flow series builder (segmented)
 ###############################################################################
 
+def net_cash_flow(series: dict, ages_for_plotting: np.ndarray) -> np.ndarray:
+    """Sum of all series, safe for an empty scenario (no spending/income/lumps yet)."""
+    if not series:
+        return np.zeros(len(ages_for_plotting))
+    return np.sum(list(series.values()), axis=0)
+
+
 def build_cash_flow_series(params: SimulationParams, annual=True) \
         -> Tuple[np.ndarray, "OrderedDict[str, np.ndarray]", "OrderedDict[str, str]"]:
 
@@ -133,7 +140,7 @@ def _add_draw_panel(fig, ages_for_plotting, series, med_port, row, annual=True):
     median MC portfolio at that age.
     """
     factor = 1 if annual else 12
-    net = np.sum(list(series.values()), axis=0)
+    net = net_cash_flow(series, ages_for_plotting)
     draw_per_period = np.maximum(0.0, -net)
     annual_draw = draw_per_period * factor
     monthly_draw = annual_draw / 12.0
@@ -204,9 +211,10 @@ def plot_cash_flow(results: Dict) -> go.Figure:
             marker_color=colors[name],
             hovertemplate="Age %{x}: ₪ %{y:,.0f}<extra>" + name + "</extra>",
         )
-    net = np.sum(list(series.values()), axis=0)
-    fig.add_scatter(x=ages_for_plotting, y=net, mode="lines", name="Net cash-flow", line=dict(color="black"))
+    net = net_cash_flow(series, ages_for_plotting)
+    fig.add_scatter(x=ages_for_plotting, y=net, mode="lines", name="Net cash-flow", line=dict(color="#EEEEEE"))
     fig.update_layout(barmode="relative",
+                      template="plotly_dark",
                       title=title,
                       xaxis_title="Age", yaxis_title="₪ per year")
 
@@ -221,7 +229,7 @@ def plot_cash_flow(results: Dict) -> go.Figure:
     )
     fig.add_scatter(
         x=ages_for_plotting, y=total_med, name="Total estate",
-        line=dict(color="black", dash="dot"), row=2, col=1
+        line=dict(color="#EEEEEE", dash="dot"), row=2, col=1
     )
 
     percentiles = [(p05_port, "5% portfolio"),
@@ -365,16 +373,16 @@ def plot_with_historic(results: Dict, historic_results: list) -> go.Figure:
             hovertemplate="Age %{x}: ₪ %{y:,.0f}<extra>" + name + "</extra>",
             row=1, col=1,
         )
-    net = np.sum(list(series.values()), axis=0)
+    net = net_cash_flow(series, ages_for_plotting)
     fig.add_scatter(x=ages_for_plotting, y=net, mode="lines", name="Net cash-flow",
-                    line=dict(color="black"), row=1, col=1)
+                    line=dict(color="#EEEEEE"), row=1, col=1)
 
     fig.add_scatter(x=ages_for_plotting, y=med_port, name="Median portfolio",
                     line=dict(color="#1f77b4"), row=2, col=1)
     fig.add_scatter(x=ages_for_plotting, y=med_prop, name="Median property",
                     line=dict(color="#9467bd"), row=2, col=1)
     fig.add_scatter(x=ages_for_plotting, y=total_med, name="Total estate",
-                    line=dict(color="black", dash="dot"), row=2, col=1)
+                    line=dict(color="#EEEEEE", dash="dot"), row=2, col=1)
     for port, label in [(p05_port, "5%"), (p25_port, "25%"),
                         (p75_port, "75%"), (p95_port, "95%")]:
         fig.add_scatter(x=ages_for_plotting, y=port, name=f"{label} portfolio",
@@ -469,6 +477,7 @@ def plot_with_historic(results: Dict, historic_results: list) -> go.Figure:
              f"| (µ={mu:.1%} σ={sigma:.1%}) | {results['scenario_name']}")
     fig.update_layout(
         barmode="relative",
+        template="plotly_dark",
         title=title,
         legend=dict(orientation="h", y=-0.04),
         xaxis_title="Age",

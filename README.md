@@ -46,6 +46,24 @@ xlsx round-trip.
 
 ---
 
+## Web app
+
+The web app is a Dash-based interactive interface that allows building and editing retirement scenarios without needing to manually edit Excel files. It provides a complete UI for:
+
+- **Builder tabs**: Portfolio, Spending, Income, Lumps, Properties tabs with interactive tables and forms
+- **Preview chart**: Real-time cash-flow preview that updates as you edit
+- **Playground mode**: Click on the chart to add what-if events (e.g., "unexpected expense at age 71")
+- **Guardrails**: Enable G1 guardrail to automatically adjust spending during market crashes
+- **Save/load**: Save scenarios as `.xlsx` files and load previously saved scenarios
+
+The web app runs the same engine logic as the CLI, so any scenario saved from the web app will run unchanged through `python cli.py scenarios/myplan.xlsx` and produce identical results.
+
+```bash
+python -m webapp.app                   # starts the web server on http://127.0.0.1:8050
+```
+
+---
+
 ## Input File Structure (Excel `.xlsx`)
 
 All input is provided in a **single flat Excel sheet**. Each section (spending, income, lumps, properties, travel) uses its own set of columns. Rows are independent per section — you can have more rows in one section than another; unused cells in other sections are simply ignored (left blank).
@@ -252,4 +270,3 @@ Hovering over the icon shows a detailed explanation of what the ruin probability
 - **Ruin** is defined as the liquid portfolio reaching ₪0. Properties are tracked separately and are not liquidated.
 - **Overlapping bands are additive** — if two income bands overlap the same age, both amounts are received. Same for spending bands.
 - The simulation uses a **Student-t distribution** for returns (when `FAT_TAIL_DF` is set) to model fat-tail crash scenarios more realistically than a normal distribution.
-

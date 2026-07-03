@@ -4,7 +4,8 @@ from typing import Dict, Optional
 
 import numpy as np
 
-from engine.params import SimulationParams
+from engine.guardrails import CATEGORIES, build_handlers, compute_guardrail_stats
+from engine.params import SimulationParams, aggregate_schedule
 
 
 ###############################################################################
@@ -48,8 +49,7 @@ def _ruin_distribution_by_year(ruined: np.ndarray, ruin_time: np.ndarray, factor
 ###############################################################################
 
 def run_simulation(params: SimulationParams, guardrails: Optional[list] = None) -> Dict[str, object]:
-    if guardrails:
-        raise NotImplementedError("guardrails are not implemented until Phase 5; pass [] or None")
+    handlers = build_handlers(guardrails)
 
     rng = np.random.default_rng(params.random_seed)
     factor = 1 if params.annual else 12
@@ -63,12 +63,35 @@ def run_simulation(params: SimulationParams, guardrails: Optional[list] = None) 
 
     n_periods = len(periods)
 
-    spend = np.array([params.spending_fn()(a) / factor for a in ages])
+    # PRD §7.2: spending decomposed per category so a guardrail can scale
+    # discretionary (lifestyle+gifts) outflows while leaving strict spending
+    # and all inflows untouched. `bands_total` is the pre-guardrail total
+    # (identical to the old single-scalar `spend`) — kept as the basis for
+    # the withdrawal-rate stats so those stay bit-identical either way.
+    spend_by_cat = {
+        cat: np.array([
+            aggregate_schedule([b for b in params.spending_bands if b.category == cat])(a) / factor
+            for a in ages
+        ])
+        for cat in CATEGORIES
+    }
+    bands_total = sum(spend_by_cat[cat] for cat in CATEGORIES)
     incomes = np.array([params.income_fn()(a) / factor for a in ages])
-    lump_map: dict = {}
+
+    lump_out_by_cat = {cat: np.zeros(n_periods) for cat in CATEGORIES}
+    lump_in = np.zeros(n_periods)
     for lump in params.lumps:
         key = lump.age if params.annual else lump.age * 12
-        lump_map[key] = lump_map.get(key, 0) + lump.amount
+        idx = int(key) - int(periods[0])
+        if 0 <= idx < n_periods:
+            if lump.amount < 0:
+                lump_out_by_cat[lump.category][idx] += -lump.amount
+            else:
+                lump_in[idx] += lump.amount
+
+    disc_out = spend_by_cat["lifestyle"] + spend_by_cat["gifts"] \
+        + lump_out_by_cat["lifestyle"] + lump_out_by_cat["gifts"]
+    strict_out = spend_by_cat["strict"] + lump_out_by_cat["strict"]
 
     bal_over_time = np.full((n_periods, params.n_paths), 0.0)
     prop_over_time = np.full((n_periods, params.n_paths), 0.0)
@@ -100,17 +123,32 @@ def run_simulation(params: SimulationParams, guardrails: Optional[list] = None) 
     for i, period in enumerate(periods):
         age = ages[i]
         start_bal = bal.copy()
-        cash_delta = incomes[i] - spend[i]
+        cash_delta = incomes[i] - bands_total[i]
 
+        rent_i = 0.0
         for p_idx, p in enumerate(params.properties):
             start_period = p.start_age if params.annual else p.start_age * 12
             if period >= start_period:
-                cash_delta += p.rent_annual / factor
-        this_period_lump = lump_map.get(period, 0)
-        bal = bal + cash_delta + this_period_lump
+                rent_i += p.rent_annual / factor
+        cash_delta += rent_i
 
-        # withdrawal/wrate stats exclude lumps, matching the original engine's
-        # cash-flow-only definition of "withdrawal"
+        # PRD §7.3: per-path multiplier applied to discretionary
+        # (lifestyle+gifts) outflows only, based on each path's own realized
+        # return in the *previous* period. Strict spending and inflows are
+        # never scaled.
+        mult = np.ones(params.n_paths)
+        for h in handlers:
+            mult *= h.multiplier(i, port_ret, params.n_paths)
+        outflow = strict_out[i] + disc_out[i] * mult
+        cash_delta_bal = incomes[i] + rent_i + lump_in[i] - outflow
+        for h in handlers:
+            h.adjustments.append(disc_out[i] * (mult - 1.0))
+
+        bal = bal + cash_delta_bal
+
+        # withdrawal/wrate stats exclude lumps and guardrail scaling,
+        # matching the original engine's cash-flow-only definition of
+        # "withdrawal" (kept bit-identical regardless of guardrails, §7.1)
         withdrawal = np.where(cash_delta < 0, -cash_delta, 0.0)
         with np.errstate(divide='ignore', invalid='ignore'):
             wrate = np.where(start_bal > 0, withdrawal / start_bal, 0.0)
@@ -148,7 +186,7 @@ def run_simulation(params: SimulationParams, guardrails: Optional[list] = None) 
 
     return {
         "summary": _summary_percentiles(bal, prop_tot, estate, ruined),
-        "guardrail_stats": None,
+        "guardrail_stats": compute_guardrail_stats(handlers),
         "final_portfolio": bal,
         "final_property": prop_tot,
         "estate_total": estate,

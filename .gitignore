@@ -15,3 +15,11 @@ venv/
 
 # Excel files
 #*.xlsx
+# Personal scenario data
+scenarios/*.xlsx
+
+# Session/agent tooling
+.claude/
+.studio-core/
+agent-runs/
+.vscode/

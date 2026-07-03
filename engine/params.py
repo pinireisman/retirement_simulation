@@ -178,6 +178,45 @@ def split_category(comment: str, default: str) -> tuple[str, str]:
     return str(comment or "").strip(), default
 
 
+def validate_scenario(scenario: dict) -> list[str]:
+    """Validate a scenario according to PRD flow 2.3 and field rules table in §4.1.
+    
+    Returns a list of human-readable error strings (empty list = valid).
+    """
+    errors = []
+    
+    # Check portfolio ages
+    portfolio = scenario["portfolio"]
+    start_age = portfolio["start_age"]
+    end_age = portfolio["end_age"]
+    
+    if not (18 <= start_age < end_age <= 110):
+        errors.append(f"Portfolio ages must satisfy: 18 <= start_age < end_age <= 110. "
+                      f"Got start_age={start_age}, end_age={end_age}")
+    
+    # Check spending bands
+    spending_bands = scenario.get("spending_bands", [])
+    if not spending_bands:
+        errors.append("Spending bands must be non-empty")
+    
+    # Check all bands in spending_bands and income_bands
+    for i, band in enumerate(spending_bands):
+        if band["age_from"] > band["age_to"]:
+            errors.append(f"Spending band {i+1} has age_from > age_to: "
+                          f"{band['age_from']} > {band['age_to']}. "
+                          f"Field name: age_from")
+    
+    # Check income bands as well
+    income_bands = scenario.get("income_bands", [])
+    for i, band in enumerate(income_bands):
+        if band["age_from"] > band["age_to"]:
+            errors.append(f"Income band {i+1} has age_from > age_to: "
+                          f"{band['age_from']} > {band['age_to']}. "
+                          f"Field name: age_from")
+    
+    return errors
+
+
 def scenario_to_xlsx(scenario: dict, path) -> None:
     """Convert a scenario dict to xlsx format with the exact column order specified in PRD."""
     

@@ -1,0 +1,155 @@
+:root {
+  --category-strict: #B71C1C;
+  --category-lifestyle: #F06292;
+  --category-gifts: #8E44AD;
+  --playground-color: #FF9800;
+
+  /* Material Design dark theme tokens */
+  --bs-body-bg: #121212;
+  --bs-body-color: rgba(255, 255, 255, .87);
+  --bs-border-color: rgba(255, 255, 255, .12);
+  --bs-primary: #90CAF9;
+  --bs-primary-rgb: 144, 202, 249;
+  --bs-secondary: #CE93D8;
+  --md-surface-0: #121212;
+  --md-surface-1: #1e1e1e;
+  --md-surface-2: #232323;
+  --md-surface-3: #262626;
+  --md-surface-4: #282828;
+  --md-radius-sm: 4px;
+  --md-radius-md: 8px;
+}
+
+body, .btn, .form-control, .nav-link, h1, h2, h3, h4, h5, h6 {
+  font-family: "Roboto", "Helvetica Neue", Arial, sans-serif;
+}
+
+body {
+  background: var(--md-surface-0);
+}
+
+/* Elevated panel — used to wrap the builder/results columns */
+.md-panel {
+  background: var(--md-surface-1);
+  border-radius: var(--md-radius-md);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .5), 0 1px 2px rgba(0, 0, 0, .6);
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.nav-tabs .nav-link {
+  border-radius: var(--md-radius-sm) var(--md-radius-sm) 0 0;
+}
+
+.modal-content {
+  border-radius: var(--md-radius-md);
+}
+
+/* DataTable dark restyle */
+.dash-table-container, .dash-spreadsheet-container {
+  border-radius: var(--md-radius-sm);
+  overflow: hidden;
+}
+.dash-spreadsheet-container td, .dash-spreadsheet-container th {
+  background-color: var(--md-surface-1) !important;
+  color: rgba(255, 255, 255, .87) !important;
+  border: none !important;
+  border-bottom: 1px solid rgba(255, 255, 255, .12) !important;
+}
+.dash-spreadsheet-container tr:hover td {
+  background-color: var(--md-surface-2) !important;
+}
+
+/* Dropdown (dash-dropdown, Radix-based) dark restyle */
+.dash-dropdown {
+  background-color: var(--md-surface-1) !important;
+  border-color: rgba(255, 255, 255, .12) !important;
+  color: rgba(255, 255, 255, .87) !important;
+}
+.dash-dropdown-value, .dash-dropdown-placeholder, .dash-dropdown-trigger-icon {
+  color: rgba(255, 255, 255, .87) !important;
+}
+.dash-dropdown-menu, .dash-dropdown-option {
+  background-color: var(--md-surface-1) !important;
+  color: rgba(255, 255, 255, .87) !important;
+}
+.dash-dropdown-option[data-highlighted] {
+  background-color: var(--md-surface-2) !important;
+}
+
+/* Slider handle/track recolor to match primary */
+.rc-slider-track {
+  background-color: var(--bs-primary);
+}
+.rc-slider-handle {
+  border-color: var(--bs-primary);
+}
+
+/* Primary Run buttons — Material raised look */
+#btn-run, #btn-run-playground {
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  font-weight: 500;
+  border-radius: var(--md-radius-sm);
+  box-shadow: 0 3px 6px rgba(0, 0, 0, .4), 0 3px 6px rgba(0, 0, 0, .5);
+  transition: box-shadow .15s ease-in-out;
+}
+#btn-run:hover, #btn-run-playground:hover {
+  box-shadow: 0 10px 20px rgba(0, 0, 0, .5), 0 6px 6px rgba(0, 0, 0, .6);
+}
+
+/* Material ripple */
+.btn {
+  position: relative;
+  overflow: hidden;
+}
+.ripple {
+  position: absolute;
+  border-radius: 50%;
+  transform: scale(0);
+  background-color: rgba(255, 255, 255, .35);
+  animation: ripple-anim 600ms linear;
+  pointer-events: none;
+}
+@keyframes ripple-anim {
+  to { transform: scale(4); opacity: 0; }
+}
+
+/* Tab styling */
+.nav-tabs .nav-link {
+  font-size: 0.9rem;
+}
+
+/* Layout spacing */
+.container-fluid {
+  padding: 0;
+}
+
+/* Playground banner */
+#banner-playground {
+  background-color: rgba(255, 152, 0, .16);
+  border: 1px solid rgba(255, 152, 0, .4);
+  color: rgba(255, 255, 255, .87);
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  border-radius: var(--md-radius-sm);
+  font-size: 0.9rem;
+}
+
+/* Guardrails panel */
+#btn-guardrails-header {
+  font-weight: bold;
+  background-color: var(--md-surface-2);
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: var(--md-radius-sm);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .5), 0 1px 2px rgba(0, 0, 0, .6);
+  margin-bottom: 10px;
+}
+
+/* Toast positioning */
+#toast {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 1050;
+}
