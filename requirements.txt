@@ -4,3 +4,4 @@ matplotlib
 openpyxl
 pyqt5
 plotly
+numbers-parser

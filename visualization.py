@@ -4,7 +4,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from simulation_params import SimulationParams
 import numpy as np
-from configuration import MARKET
+from configuration import (MARKET, portfolio_real_return_mean_by_market,
+                           portfolio_real_return_sd_by_market)
 
 
 ###############################################################################
@@ -87,6 +88,45 @@ def build_cash_flow_series(params: SimulationParams, annual=True) \
 
 
 ###############################################################################
+# Annual portfolio draw panel helper
+###############################################################################
+
+def _add_draw_panel(fig, ages_for_plotting, series, med_port, row, annual=True):
+    """Add annual portfolio draw bars to the given subplot row.
+
+    Bars are shown in annual ₪ terms regardless of simulation mode.
+    Hover reveals annual draw, monthly draw, and draw rate as % of the
+    median MC portfolio at that age.
+    """
+    factor = 1 if annual else 12
+    net = np.sum(list(series.values()), axis=0)   # per period (year or month)
+    draw_per_period = np.maximum(0.0, -net)        # always >= 0
+    annual_draw = draw_per_period * factor         # annualised
+    monthly_draw = annual_draw / 12.0
+
+    with np.errstate(divide='ignore', invalid='ignore'):
+        draw_pct = np.where(med_port > 0, annual_draw / med_port * 100.0, 0.0)
+
+    bar_colors = ["#d62728" if d > 0 else "#eeeeee" for d in draw_per_period]
+
+    fig.add_bar(
+        x=ages_for_plotting,
+        y=annual_draw,
+        name="Portfolio draw",
+        marker_color=bar_colors,
+        customdata=np.stack([monthly_draw, draw_pct], axis=1),
+        hovertemplate=(
+            "<b>Age %{x}</b><br>"
+            "Annual draw: ₪%{y:,.0f}<br>"
+            "Monthly draw: ₪%{customdata[0]:,.0f}<br>"
+            "Draw rate: %{customdata[1]:.1f}% of median portfolio<br>"
+            "<extra>Portfolio Draw</extra>"
+        ),
+        row=row, col=1,
+    )
+
+
+###############################################################################
 # Plot cash‑flows (segmented)
 ###############################################################################
 
@@ -118,12 +158,15 @@ def plot_cash_flow(results: Dict):
     ruin = results["summary"]["ruin_probability"]
     ruin_range, ruin_title, ruin_explanation = get_ruin_explanation(ruin)
 
+    mu = portfolio_real_return_mean_by_market[MARKET]
+    sigma = portfolio_real_return_sd_by_market[MARKET]
     title = (f"Segmented annual cash‑flow (real ₪) - ruin probability: {ruin:.3%} "
              f"success: {1 - ruin:.3%} "
-             f"market: {MARKET} scenario: {results['input_file']}")
+             f"market: {MARKET} (µ={mu:.1%} σ={sigma:.1%}) scenario: {results['input_file']}")
 
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
-                        subplot_titles=("Cash‑flow breakdown", "Portfolio & Property"))
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
+                        subplot_titles=("Cash‑flow breakdown", "Portfolio & Property",
+                                        "Annual Portfolio Draw"))
     # plot the bars of cach‑flows
     for idx, (name, arr) in enumerate(series.items()):
         fig.add_bar(
@@ -195,6 +238,9 @@ def plot_cash_flow(results: Dict):
         rows=[2], cols=[1],
     )
 
+    # ----- pane C: annual portfolio draw -----
+    _add_draw_panel(fig, ages_for_plotting, series, med_port, row=3, annual=annual)
+
     # ----- Ruin probability icon annotation -----
     # Determine icon color based on ruin level
     if ruin < 0.03:
@@ -229,11 +275,200 @@ def plot_cash_flow(results: Dict):
     # ----- layout tweaks -----
     fig.update_layout(
         barmode="relative",
-        legend=dict(orientation="h", y=-0.15),
+        legend=dict(orientation="h", y=-0.08),
         xaxis_title="Age",
         yaxis_title="₪ / year (real)",
         yaxis2_title="₪ balance (real)",
-        height=1400,
+        yaxis3_title="₪ / year (real)",
+        height=1800,
     )
+
+    fig.show()
+
+
+###############################################################################
+# Combined plot: Monte-Carlo + historic scenarios
+###############################################################################
+
+def plot_with_historic(results: Dict, historic_results: list) -> None:
+    """Build a single Plotly figure with the standard 2-panel MC view on top
+    and one additional panel per historic scenario below."""
+    annual = "bal_over_age" in results
+    ages, series, colors = build_cash_flow_series(results["params"], annual=annual)
+
+    factor = 1 if annual else 12.0
+    ages_for_plotting = ages / factor
+
+    if annual:
+        port_paths = results["bal_over_age"]
+        prop_paths = results["prop_over_age"]
+    else:
+        port_paths = results["bal_over_month"]
+        prop_paths = results["prop_over_month"]
+
+    p05_port = np.percentile(port_paths, 5, axis=1)
+    p25_port = np.percentile(port_paths, 25, axis=1)
+    med_port = np.percentile(port_paths, 50, axis=1)
+    p75_port = np.percentile(port_paths, 75, axis=1)
+    p95_port = np.percentile(port_paths, 95, axis=1)
+    med_prop = np.percentile(prop_paths, 50, axis=1)
+    total_med = med_port + med_prop
+
+    ruin = results["summary"]["ruin_probability"]
+    ruin_range, ruin_title, ruin_explanation = get_ruin_explanation(ruin)
+
+    params = results["params"]
+    n = len(historic_results)
+
+    # Build subplot titles
+    hist_titles = []
+    for hr in historic_results:
+        boundary_age = params.start_age + hr["n_historic_years"]
+        label = (f"RUIN at age {hr['ruin_age']}" if hr["ruined"]
+                 else f"survived ₪{hr['terminal_portfolio']:,.0f}")
+        data_years = f"{hr['start_year']}–{hr['end_year']}"
+        hist_titles.append(
+            f"{hr['name']} ({data_years}) — {label}"
+            + (f" | mean return from age {boundary_age}" if boundary_age <= params.end_age else "")
+        )
+
+    subplot_titles = (["Cash-flow breakdown", "Portfolio & Property (Monte-Carlo)",
+                       "Annual Portfolio Draw"] + hist_titles)
+
+    fig = make_subplots(
+        rows=3 + n, cols=1,
+        shared_xaxes=True,
+        subplot_titles=subplot_titles,
+        vertical_spacing=0.04,
+    )
+
+    # ── Row 1: cash-flow bars ──────────────────────────────────────────────
+    for name, arr in series.items():
+        fig.add_bar(
+            x=ages_for_plotting, y=arr, name=name,
+            marker_color=colors[name],
+            hovertemplate="Age %{x}: ₪ %{y:,.0f}<extra>" + name + "</extra>",
+            row=1, col=1,
+        )
+    net = np.sum(list(series.values()), axis=0)
+    fig.add_scatter(x=ages_for_plotting, y=net, mode="lines", name="Net cash-flow",
+                    line=dict(color="black"), row=1, col=1)
+
+    # ── Row 2: MC portfolio percentile bands ───────────────────────────────
+    fig.add_scatter(x=ages_for_plotting, y=med_port, name="Median portfolio",
+                    line=dict(color="#1f77b4"), row=2, col=1)
+    fig.add_scatter(x=ages_for_plotting, y=med_prop, name="Median property",
+                    line=dict(color="#9467bd"), row=2, col=1)
+    fig.add_scatter(x=ages_for_plotting, y=total_med, name="Total estate",
+                    line=dict(color="black", dash="dot"), row=2, col=1)
+    for port, label in [(p05_port, "5%"), (p25_port, "25%"),
+                        (p75_port, "75%"), (p95_port, "95%")]:
+        fig.add_scatter(x=ages_for_plotting, y=port, name=f"{label} portfolio",
+                        line=dict(color="blue", width=1), row=2, col=1)
+    fig.add_traces([go.Scatter(
+        x=np.concatenate([ages_for_plotting, ages_for_plotting[::-1]]),
+        y=np.concatenate([p25_port, p75_port[::-1]]),
+        fill="toself", fillcolor="rgba(0,0,0,0.2)",
+        line=dict(color="rgba(255,255,255,0)"), hoverinfo="skip", name="25–75% band",
+    )], rows=[2], cols=[1])
+    fig.add_traces([go.Scatter(
+        x=np.concatenate([ages_for_plotting, ages_for_plotting[::-1]]),
+        y=np.concatenate([p05_port, p95_port[::-1]]),
+        fill="toself", fillcolor="rgba(31,119,180,0.2)",
+        line=dict(color="rgba(255,255,255,0)"), hoverinfo="skip", name="5–95% band",
+    )], rows=[2], cols=[1])
+
+    # ── Row 3: annual portfolio draw ───────────────────────────────────────
+    _add_draw_panel(fig, ages_for_plotting, series, med_port, row=3, annual=annual)
+
+    # ── Rows 4…N+3: one panel per historic scenario ────────────────────────
+    for k, hr in enumerate(historic_results):
+        row = 4 + k
+        color = "#d62728" if hr["ruined"] else "#2ca02c"
+        ages_h = hr["ages"]
+        port_h = hr["portfolio_over_time"]
+        prop_h = hr["property_over_time"]
+
+        boundary_age = params.start_age + hr["n_historic_years"]
+        y_axis = "y" if row == 1 else f"y{row}"
+
+        # Grey shading for mean-continuation region
+        if boundary_age <= params.end_age:
+            fig.add_shape(
+                type="rect",
+                x0=boundary_age, x1=params.end_age + 0.5,
+                y0=0, y1=1,
+                xref="x", yref=f"{y_axis} domain",
+                fillcolor="rgba(200,200,200,0.2)",
+                line=dict(width=0),
+                layer="below",
+            )
+            fig.add_shape(
+                type="line",
+                x0=boundary_age, x1=boundary_age,
+                y0=0, y1=1,
+                xref="x", yref=f"{y_axis} domain",
+                line=dict(color="grey", dash="dash", width=1),
+            )
+
+        # Calendar year for each age: historic data years, then "—" for mean-return continuation
+        years_h = [
+            str(hr["start_year"] + i) if i < hr["n_historic_years"] else "—"
+            for i in range(len(ages_h))
+        ]
+        hover_tpl = (
+            "<b>Age %{x}</b>  <i>(%{customdata})</i><br>"
+            "₪%{y:,.0f}<br>"
+            "<extra></extra>"
+        )
+
+        fig.add_scatter(
+            x=ages_h, y=port_h,
+            name=f"{hr['name']} · portfolio",
+            line=dict(color=color, width=2),
+            customdata=years_h,
+            hovertemplate=hover_tpl,
+            row=row, col=1,
+        )
+        fig.add_scatter(
+            x=ages_h, y=prop_h,
+            name=f"{hr['name']} · property",
+            line=dict(color=color, width=1, dash="dot"),
+            customdata=years_h,
+            hovertemplate=hover_tpl,
+            row=row, col=1,
+        )
+
+    # ── Ruin probability annotation (top-right) ────────────────────────────
+    icon_color = "green" if ruin < 0.03 else ("orange" if ruin < 0.10 else "red")
+    fig.add_annotation(
+        xref="paper", yref="paper", x=1.0, y=1.02, showarrow=False,
+        text='<span style="font-size:22px; cursor:pointer;">ℹ️</span>',
+        font=dict(size=22, color=icon_color),
+        hovertext=f"<b>[{ruin_range}] {ruin_title}</b><br><br>{ruin_explanation}",
+        hoverlabel=dict(bgcolor="white", font=dict(size=13)),
+    )
+    fig.add_annotation(
+        xref="paper", yref="paper", x=0.98, y=1.02, showarrow=False,
+        text=f"<b>[{ruin_range}] {ruin_title}</b>",
+        font=dict(size=13, color=icon_color), align="right", xanchor="right",
+    )
+
+    mu = portfolio_real_return_mean_by_market[MARKET]
+    sigma = portfolio_real_return_sd_by_market[MARKET]
+    title = (f"Retirement simulation — MC ruin: {ruin:.3%} "
+             f"| market: {MARKET} (µ={mu:.1%} σ={sigma:.1%}) | {results['input_file']}")
+    fig.update_layout(
+        barmode="relative",
+        title=title,
+        legend=dict(orientation="h", y=-0.04),
+        xaxis_title="Age",
+        yaxis_title="₪ / year (real)",
+        yaxis2_title="₪ balance (real)",
+        yaxis3_title="₪ / year (real)",
+        height=1800 + n * 320,
+    )
+    for i in range(4, 4 + n):
+        fig.update_yaxes(title_text="₪ balance (real)", row=i, col=1)
 
     fig.show()

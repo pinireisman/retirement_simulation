@@ -14,7 +14,7 @@ from typing import Dict
 import numpy as np
 import pandas as pd
 from simulation_params import SimulationParams
-from visualization import plot_cash_flow
+from visualization import plot_cash_flow, plot_with_historic
 
 
 ###############################################################################
@@ -25,6 +25,7 @@ def sample_real_returns(
     mean=0.05,
     std=0.16,
     df=5,          # lower = fatter tails. try 4–7
+    clipping_thr=(-0.75,0.75), # clip min,max step change
     rng=None
 ):
     if rng is None:
@@ -32,7 +33,9 @@ def sample_real_returns(
     # Student-t has variance df/(df-2), so rescale to target std
     raw = rng.standard_t(df=df, size=n)
     scaled = raw / np.sqrt(df / (df - 2))
-    return mean + std * scaled
+    normalized = mean + std * scaled
+    clipped = np.clip(normalized, clipping_thr[0], clipping_thr[1])
+    return clipped
 
 def run_simulation(params: SimulationParams) -> Dict[str, object]:
     annual = params.annual
@@ -259,12 +262,104 @@ def run_simulation(params: SimulationParams) -> Dict[str, object]:
 
 
 ###############################################################################
+# Historic scenario runner
+###############################################################################
+
+def _format_historic_name(key: str) -> str:
+    parts = key.split("_")
+    year = parts[0]
+    name = " ".join(word.capitalize() for word in parts[1:])
+    return f"{name} ({year})"
+
+
+def run_historic_scenario(params: SimulationParams, real_factors, property_factors=None) -> Dict:
+    """Run a single deterministic path using a historical growth-factor sequence.
+
+    real_factors: array-like of annual portfolio growth multipliers
+                  (e.g. 0.95 = -5%, 1.15 = +15%).
+    After the sequence is exhausted, uses 1 + params.real_return_mean for
+    remaining years. Always runs in annual mode regardless of params.annual.
+    property_factors: optional array of property growth multipliers;
+                      uses p.growth_mean when absent or exhausted.
+    """
+    ages = np.arange(params.start_age, params.end_age + 1)
+    n_historic = len(real_factors)
+    mean_factor = 1.0 + params.real_return_mean
+
+    spend_fn = params.spending_fn()
+    income_fn = params.income_fn()
+
+    lump_map: dict = {}
+    for lump in params.lumps:
+        lump_map[lump.age] = lump_map.get(lump.age, 0) + lump.amount
+
+    bal = float(params.initial_portfolio)
+    ruined = False
+    ruin_age = None
+    prop_vals = [0.0] * len(params.properties)
+    portfolio_over_time: list = []
+    property_over_time: list = []
+
+    for i, age in enumerate(ages):
+        cash_delta = income_fn(age) - spend_fn(age)
+        for p in params.properties:
+            if age >= p.start_age:
+                cash_delta += p.rent_annual
+        bal += cash_delta + lump_map.get(int(age), 0)
+
+        if not ruined and bal <= 0:
+            ruined = True
+            ruin_age = int(age)
+            bal = 0.0
+
+        if not ruined:
+            pf = float(real_factors[i]) if i < n_historic else mean_factor
+            bal *= pf
+
+        for j, p in enumerate(params.properties):
+            if age >= p.start_age and prop_vals[j] == 0.0:
+                prop_vals[j] = p.initial_value
+            if prop_vals[j] > 0.0:
+                if property_factors is not None and i < len(property_factors):
+                    prop_vals[j] *= float(property_factors[i])
+                else:
+                    prop_vals[j] *= (1.0 + p.growth_mean)
+
+        portfolio_over_time.append(bal)
+        property_over_time.append(sum(prop_vals))
+
+    return {
+        "ages": ages,
+        "portfolio_over_time": portfolio_over_time,
+        "property_over_time": property_over_time,
+        "ruined": ruined,
+        "ruin_age": ruin_age,
+        "terminal_portfolio": bal,
+        "terminal_property": sum(prop_vals),
+        "n_historic_years": n_historic,
+    }
+
+
+###############################################################################
 # CLI demo
 ###############################################################################
 
+def _read_numbers_as_df(path):
+    from numbers_parser import Document
+    doc = Document(path)
+    table = doc.sheets[0].tables[0]
+    rows = table.rows()
+    headers = [cell.value for cell in rows[0]]
+    data = [[cell.value for cell in row] for row in rows[1:]]
+    return pd.DataFrame(data, columns=headers)
+
+
 def read_scenario_data(path):
     print(f"Reading scenario data from {path}...")
-    pdf = pd.read_excel(path)
+    if str(path).lower().endswith('.numbers'):
+        pdf = _read_numbers_as_df(path)
+    else:
+        pdf = pd.read_excel(path)
     scenario_data = {}
     scenario_data['initial_portfolio'] = pdf['initial_portfolio'].iloc[0]
     scenario_data['start_age'] = pdf['start_age'].iloc[0]
@@ -299,6 +394,8 @@ def _cli():
                         help="Path to the scenario data .xlsx file (default: ./scenario_data_example.xlsx)")
 
     parser.add_argument("--plot", action="store_true", help="Show interactive cash‑flow plot")
+    parser.add_argument("--historic", action="store_true",
+                        help="Run historical return sequences and display portfolio trajectories below the main chart")
     args = parser.parse_args()
 
     scenario_data = read_scenario_data(args.input)
@@ -329,8 +426,22 @@ def _cli():
     else:
         print("\nNo tracks ended in ruin.")
 
-    if args.plot:
-        result["input_file"] = args.input
+    result["input_file"] = args.input
+    if args.historic:
+        from historic_returns import historical_stress_real_factors_70_30
+        historic_results = []
+        print("\nHistoric scenario results:")
+        for key, seq in historical_stress_real_factors_70_30.items():
+            r = run_historic_scenario(params, seq["real_factors"], seq.get("property_factors"))
+            r["name"] = _format_historic_name(key)
+            r["start_year"] = int(seq["years"][0])
+            r["end_year"] = int(seq["years"][-1])
+            historic_results.append(r)
+            status = (f"RUIN at age {r['ruin_age']}" if r["ruined"]
+                      else f"survived ₪{r['terminal_portfolio']:,.0f}")
+            print(f"  [{status}]  {r['name']}")
+        plot_with_historic(result, historic_results)
+    elif args.plot:
         plot_cash_flow(result)
 
 
