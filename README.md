@@ -31,10 +31,18 @@ Open the workspace and VS Code will automatically use `.venv/bin/python` (config
 ## How to Run
 
 ```bash
-python simlulation_main.py                          # uses scenario_data_example.xlsx
-python simlulation_main.py my_scenario.xlsx         # uses a custom file
-python simlulation_main.py my_scenario.xlsx --plot  # also shows the interactive chart
+python cli.py                          # uses scenario_data_example.xlsx
+python cli.py my_scenario.xlsx         # uses a custom file
+python cli.py my_scenario.xlsx --plot  # also shows the interactive chart
+python cli.py my_scenario.xlsx --historic  # also runs historical stress sequences
 ```
+
+The simulation engine itself lives in the `engine/` package (`engine/params.py`,
+`engine/simulation.py`, `engine/figures.py`, `engine/markets.py`,
+`engine/historic_returns.py`) so it can be imported by both this CLI and the
+upcoming web app — `cli.py` is just a thin argument-parsing wrapper around it.
+Run `pytest tests/ -q` to check the engine against its pinned baseline and the
+xlsx round-trip.
 
 ---
 
@@ -139,7 +147,7 @@ Real-estate assets held **outside** the liquid portfolio. They grow independentl
 | `properties_rent_monthly` | Monthly net rental income in real ₪ | `8,333` |
 | `properties_comment` | Description | `3 rental units` |
 
-> Properties have their own stochastic growth model (separate from the portfolio), using market-specific real appreciation mean and volatility defined in `configuration.py`.
+> Properties have their own stochastic growth model (separate from the portfolio), using market-specific real appreciation mean and volatility defined in `engine/markets.py`.
 
 **Example from `scenario_data_example.xlsx`:**
 - Age 50: Apartment worth ₪5M, no rent (*apt 1, pre-rental*)
@@ -147,30 +155,32 @@ Real-estate assets held **outside** the liquid portfolio. They grow independentl
 
 ---
 
-## Simulation Parameters (`configuration.py`)
+## Simulation Parameters (`engine/params.py`, `engine/markets.py`)
 
-These are global settings that control how the Monte-Carlo engine runs. Edit `configuration.py` to change them.
+The old `configuration.py`/`simulation_params.py` module-level settings are
+gone. Their defaults now live as keyword arguments on
+`SimulationParams.from_legacy_scenario_data()` (called from `cli.py`) and as
+dataclass field defaults on `SimulationParams` itself:
 
 | Parameter | Description | Default |
 |---|---|---|
-| `MARKET` | Market preset: `"IL"`, `"US"`, or `"UK"`. Controls return and volatility assumptions. | `"IL"` |
-| `ANNUAL` | `True` = annual simulation steps, `False` = monthly steps | `True` |
-| `FAT_TAIL_DF` | Degrees of freedom for the Student-t return distribution. Lower = fatter tails (more crashes). Use `None` for normal distribution. `5` is moderate fat tails, `3` is extreme, `10` is near-normal. | `5` |
+| `market` | Market preset: `"IL"`, `"US"`, or `"UK"`. Controls return/volatility assumptions (see `engine/markets.py`). | `"IL"` |
+| `annual` | `True` = annual simulation steps, `False` = monthly steps | `True` |
+| `fat_tails_df` | Degrees of freedom for the Student-t return distribution. Lower = fatter tails (more crashes). Use `None` for a normal distribution. `5` is moderate fat tails, `3` is extreme, `10` is near-normal. | `5` |
+| `n_paths` | Number of simulated life paths | `10,000` |
+| `random_seed` | Random seed for reproducibility | `42` |
 
-### Market Return Assumptions
+`cli.py` doesn't expose flags for these yet — change them by editing the
+`from_legacy_scenario_data(scenario_data, ...)` call in `cli.py`, or by
+constructing `SimulationParams(...)` directly.
+
+### Market Return Assumptions (`engine/markets.py`)
 
 | Market | Portfolio Mean Real Return | Portfolio Std Dev | Property Mean Real Growth | Property Std Dev |
 |---|---|---|---|---|
-| IL (Israel) | 5.0% | 16.0% | 1.8% | 8.0% |
+| IL (Israel) | 4.2% | 13.0% | 1.8% | 8.0% |
 | US | 3.0% | 12.0% | 1.0% | 6.0% |
 | UK | 5.3% | 20.0% | 2.4% | 7.0% |
-
-### Monte-Carlo Engine Settings (in `simulation_params.py`)
-
-| Parameter | Description | Default |
-|---|---|---|
-| `n_paths` | Number of simulated life paths | `10,000` |
-| `random_seed` | Random seed for reproducibility | `42` |
 
 ---
 
