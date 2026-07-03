@@ -796,7 +796,7 @@ returning `go.Figure` (plus `cli.py` thin wrapper that keeps `--plot
   as `git stash; python simlulation_main.py scenario_data_example.xlsx`
   (record the number in the test as the baseline).
 
-**LLM:** `claude-sonnet-4-6`. Careful refactor with a backward-compat
+**LLM:** `claude-sonnet-5`. Careful refactor with a backward-compat
 contract and numpy semantics — above Haiku/local reliability, below needing
 Fable. Local `Qwen3-Coder-30B` may draft the pure-boilerplate xlsx
 writer/reader from §4.4, Sonnet reviews.
@@ -816,7 +816,7 @@ without playground), validation toasts, `scenarios/` dir.
 - Edit a cell in `tbl-spending` → preview chart updates within 1 s; category
   colors match §6.3.
 
-**LLM:** `claude-sonnet-4-6` for the store⇄table sync callbacks (#1/#2 —
+**LLM:** `claude-sonnet-5` for the store⇄table sync callbacks (#1/#2 —
 the circular-update guard is the one genuinely tricky part). Tab layouts,
 DataTable column definitions, and the save modal are boilerplate:
 `claude-haiku-4-5` or local `Qwen3-Coder-30B`.
@@ -836,7 +836,7 @@ summary cards), historic toggle (`plot_with_historic` port, panels appended).
   template to `visualization.py:118`.
 - Two consecutive runs don't grow memory unboundedly (cache evicts at 5).
 
-**LLM:** `claude-sonnet-4-6`. Mostly a mechanical port of existing figure
+**LLM:** `claude-sonnet-5`. Mostly a mechanical port of existing figure
 code; percentile/ribbon subtleties make it above Haiku grade.
 
 ### Phase 4 — Playground mode
@@ -855,7 +855,7 @@ playground events" wiring into `execute_run`.
   (assert by loading it back).
 - Load scenario → playground store cleared.
 
-**LLM:** `claude-sonnet-4-6`. `clickData`/pattern-matching-callback plumbing
+**LLM:** `claude-sonnet-5`. `clickData`/pattern-matching-callback plumbing
 has sharp edges but is well-trodden; escalate to `claude-fable-5` only if the
 duplicate-output graph deadlocks twice.
 
