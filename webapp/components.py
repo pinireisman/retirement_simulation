@@ -1,7 +1,7 @@
 from dash import dcc, html, dash_table
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
-from engine.theme import PLOTLY_TEMPLATE, INK, SUCCESS, WARNING, DANGER
+from engine.theme import PLOTLY_TEMPLATE
 
 
 def build_panel(title, children):
@@ -82,14 +82,14 @@ def build_data_table(id, columns, category_col=None, **table_kwargs):
 
 def build_stat_tile(label, value, tone=None, hero=False):
     """Build a stat tile with label and value."""
-    # Determine text color based on tone
-    color = INK
+    # Determine text color based on tone (CSS vars so dark mode repaints correctly)
+    color = "var(--ink)"
     if tone == "success":
-        color = SUCCESS
+        color = "var(--success)"
     elif tone == "borderline":
-        color = WARNING
+        color = "var(--warning)"
     elif tone == "danger":
-        color = DANGER
+        color = "var(--danger)"
     
     # Determine font size based on hero flag
     font_size = "2rem" if hero else "1.5rem"

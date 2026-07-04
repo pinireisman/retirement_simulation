@@ -28,11 +28,11 @@ from engine.guardrails import parse_guardrail_configs
 from engine.historic_returns import historical_stress_real_factors_70_30
 from engine.params import SimulationParams, validate_scenario
 from engine.simulation import run_historic_scenario, run_simulation
-from engine.theme import PLOTLY_TEMPLATE, SERIES_NET_CASH_FLOW, SUCCESS, WARNING, DANGER, tone_for_ruin
+from engine.theme import PLOTLY_TEMPLATE, SERIES_NET_CASH_FLOW, tone_for_ruin
 from webapp.components import build_stat_tile, build_badge_row, build_chart_card
 
 _GUARDRAIL_DISPLAY_NAMES = {"volatility_discretionary_scaling": "Spending guardrail"}
-_TONE_COLOR = {"success": SUCCESS, "borderline": WARNING, "danger": DANGER}
+_TONE_COLOR = {"success": "var(--success)", "borderline": "var(--warning)", "danger": "var(--danger)"}
 
 # PRD §5.1: cache raw run results by run_id, evicting the oldest once more
 # than 5 accumulate (single-process/single-user app, PRD §3.2).
@@ -705,3 +705,21 @@ def register_callbacks(app) -> None:
             _stat_tiles(summary, guardrail_stats), _result_badges(badges), run_id,
             "Simulation complete", True, "success",
         )
+
+    # Figures are always rendered server-side in the light palette; repaint them
+    # for the active theme client-side whenever Dash pushes new figure data
+    # (window.paintCharts lives in assets/theme.js).
+    app.clientside_callback(
+        """
+        function() {
+            if (window.paintCharts) { window.paintCharts(); }
+            return "";
+        }
+        """,
+        Output("theme-sync", "children"),
+        Input("graph-results", "figure"),
+        Input("graph-portfolio", "figure"),
+        Input("graph-draw", "figure"),
+        Input("graph-preview", "figure"),
+        Input("div-historic-cards", "children"),
+    )

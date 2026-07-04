@@ -24,6 +24,10 @@
   --radius-md: 8px;
   --radius-pill: 24px;
 
+  --panel-border: rgba(31, 41, 51, .08);
+  --shadow-resting: 0 1px 3px rgba(31, 41, 51, .10), 0 1px 2px rgba(31, 41, 51, .06);
+  --shadow-hover: 0 4px 10px rgba(31, 41, 51, .16), 0 2px 4px rgba(31, 41, 51, .10);
+
   /* BOOTSTRAP is already a light theme — just repoint brand + surface colors. */
   --bs-body-bg: var(--canvas);
   --bs-body-color: var(--ink);
@@ -37,6 +41,114 @@
   --md-surface-2: var(--canvas);
 }
 
+/* Dark theme — same tokens, repointed. Bootstrap 5.3's own [data-bs-theme]
+   dark rules load first (external stylesheet); this block wins on load
+   order + equal specificity, same trick the :root comment above relies on. */
+[data-bs-theme="dark"] {
+  --canvas: #12151C;
+  --surface: #1B1F29;
+  --ink: #E7E9EE;
+  --ink-2: rgba(231, 233, 238, .64);
+  --primary: #7C93FF;
+  --primary-hover: #93A6FF;
+  --success: #66BB6A;
+  --warning: #FFCA80;
+  --danger: #EF5350;
+
+  --category-strict: #E57373;
+  --category-lifestyle: #F06292;
+  --category-gifts: #B085D6;
+  --playground-color: #FF9F4A;
+
+  --wash-neutral: #241C38;
+  --wash-success: #13322D;
+  --wash-borderline: #142A3D;
+  --wash-danger: #3A1F22;
+
+  --panel-border: rgba(231, 233, 238, .10);
+  --shadow-resting: 0 1px 3px rgba(0, 0, 0, .35), 0 1px 2px rgba(0, 0, 0, .20);
+  --shadow-hover: 0 4px 10px rgba(0, 0, 0, .45), 0 2px 4px rgba(0, 0, 0, .30);
+
+  --bs-body-bg: var(--canvas);
+  --bs-body-color: var(--ink);
+  --bs-border-color: rgba(231, 233, 238, .12);
+  --bs-primary: var(--primary);
+  --bs-primary-rgb: 124, 147, 255;
+
+  --md-surface-1: var(--surface);
+  --md-surface-2: var(--canvas);
+}
+
+/* Theme toggle icon swap — pure CSS, no JS timing to get right. */
+.icon-theme-sun { display: none; }
+[data-bs-theme="dark"] .icon-theme-sun { display: inline; }
+[data-bs-theme="dark"] .icon-theme-moon { display: none; }
+
+/* react-select v1 popups (dcc.Dropdown + DataTable category-cell editor)
+   ship their own hardcoded light styling untouched by dbc's dark mode. */
+/* react-select's own bundled CSS is injected by its JS chunk at runtime,
+   landing after style.css in the cascade — beat it with !important rather
+   than chase load order. */
+[data-bs-theme="dark"] .Select-control,
+[data-bs-theme="dark"] .Select-menu-outer,
+[data-bs-theme="dark"] .Select-menu,
+[data-bs-theme="dark"] .Select-placeholder,
+[data-bs-theme="dark"] .Select-input > input,
+[data-bs-theme="dark"] .VirtualizedSelectFocusedOption {
+  background-color: var(--surface) !important;
+  color: var(--ink) !important;
+}
+[data-bs-theme="dark"] .Select-control {
+  border-color: var(--panel-border) !important;
+}
+[data-bs-theme="dark"] .Select-value-label,
+[data-bs-theme="dark"] .Select-option {
+  color: var(--ink) !important;
+  background-color: var(--surface) !important;
+}
+[data-bs-theme="dark"] .Select-option.is-focused,
+[data-bs-theme="dark"] .Select-option.is-selected {
+  background-color: var(--canvas) !important;
+}
+[data-bs-theme="dark"] .Select-arrow {
+  border-color: var(--ink) transparent transparent !important;
+}
+
+/* Dash 4's native dcc.Dropdown / dcc.Slider (Radix-based, replaced
+   react-select + rc-slider) — separate component tree, own hardcoded colors. */
+[data-bs-theme="dark"] .dash-dropdown,
+[data-bs-theme="dark"] .dash-range-slider-input {
+  background-color: var(--canvas);
+  border-color: var(--bs-border-color);
+  color: var(--ink);
+}
+[data-bs-theme="dark"] .dash-options-list,
+[data-bs-theme="dark"] .dash-dropdown-search {
+  background-color: var(--surface) !important;
+  color: var(--ink) !important;
+  border-color: var(--panel-border) !important;
+}
+[data-bs-theme="dark"] .dash-dropdown-option:hover,
+[data-bs-theme="dark"] .dash-dropdown-option.selected {
+  background-color: var(--canvas) !important;
+}
+[data-bs-theme="dark"] .dash-slider-mark {
+  color: var(--ink-2);
+}
+[data-bs-theme="dark"] .dash-slider-track {
+  background-color: rgba(231, 233, 238, .15);
+}
+
+/* dash_table's <tr>/<td> ship a hardcoded white background that style_cell's
+   backgroundColor prop doesn't reach (same class of bug as the
+   .dash-cell-value text-color fix below) — force it dark like the rest of
+   the panel. Category-colored cells keep their own inline !important. */
+[data-bs-theme="dark"] .dash-spreadsheet-inner tr,
+[data-bs-theme="dark"] .dash-spreadsheet-inner td.dash-cell,
+[data-bs-theme="dark"] .dash-delete-cell {
+  background-color: var(--surface) !important;
+}
+
 body, .btn, .form-control, .nav-link, h1, h2, h3, h4, h5, h6 {
   font-family: "Roboto", "Helvetica Neue", Arial, sans-serif;
 }
@@ -48,9 +160,9 @@ body {
 /* Elevated panel — used to wrap the builder/results columns */
 .md-panel {
   background: var(--surface);
-  border: 1px solid rgba(31, 41, 51, .08);
+  border: 1px solid var(--panel-border);
   border-radius: var(--radius-md);
-  box-shadow: 0 1px 3px rgba(31, 41, 51, .10), 0 1px 2px rgba(31, 41, 51, .06);
+  box-shadow: var(--shadow-resting);
   padding: 16px;
   margin-bottom: 16px;
 }
@@ -94,11 +206,11 @@ body {
 #btn-run, #btn-run-playground {
   border-radius: var(--radius-pill);
   font-weight: 500;
-  box-shadow: 0 1px 3px rgba(31, 41, 51, .10), 0 1px 2px rgba(31, 41, 51, .06);
+  box-shadow: var(--shadow-resting);
   transition: box-shadow .15s ease-in-out;
 }
 #btn-run:hover, #btn-run-playground:hover {
-  box-shadow: 0 4px 10px rgba(31, 41, 51, .16), 0 2px 4px rgba(31, 41, 51, .10);
+  box-shadow: var(--shadow-hover);
 }
 
 /* Material ripple */
@@ -122,7 +234,11 @@ body {
 }
 
 .container-fluid {
-  padding: 0;
+  /* Keep Bootstrap's horizontal gutter padding: it offsets the negative
+     margins of child .row elements. Zeroing it (padding:0) let every row
+     poke 12px past the viewport, causing horizontal scroll (UX-RESP-01/02). */
+  padding-top: 0;
+  padding-bottom: 0;
 }
 
 /* Playground banner */
@@ -140,9 +256,9 @@ body {
 #btn-guardrails-header {
   font-weight: bold;
   background-color: var(--surface);
-  border: 1px solid rgba(31, 41, 51, .08);
+  border: 1px solid var(--panel-border);
   border-radius: var(--radius-sm);
-  box-shadow: 0 1px 3px rgba(31, 41, 51, .10), 0 1px 2px rgba(31, 41, 51, .06);
+  box-shadow: var(--shadow-resting);
   margin-bottom: 10px;
 }
 
@@ -260,4 +376,12 @@ body {
    not covered by the DataTable style_cell prop (R5 follow-up). */
 .dash-cell-value {
   color: var(--ink) !important;
+}
+
+/* dash_table's own bundled CSS sets `.dash-cell-value.unfocused
+   { caret-color: transparent }`, but its "unfocused" class can be applied
+   to an input that still has real DOM focus (see table_cursor_fix.js) —
+   force the caret visible whenever the input is genuinely focused. */
+.dash-cell-value.unfocused:focus {
+  caret-color: var(--ink) !important;
 }

@@ -53,10 +53,15 @@ def build_layout():
                 width="auto",
             ),
             dbc.Col([
+                dbc.Button([
+                    html.Span("🌙", className="icon-theme-moon"),
+                    html.Span("☀️", className="icon-theme-sun"),
+                ], id="btn-theme-toggle", color="outline-secondary", size="sm",
+                    className="me-2", title="Toggle dark / light theme"),
                 dbc.Button("Save scenario", id="btn-save", color="outline-primary", size="sm"),
                 dbc.Button("Load", id="btn-load", color="outline-primary", size="sm"),
                 dcc.Dropdown(id="dd-load-scenario", options=[], placeholder="Select a scenario…", className="ms-2"),
-                dcc.Upload(id="upload-scenario", children=dbc.Button("Upload .xlsx", color="outline-primary", size="sm", className="ms-2")),
+                dcc.Upload(id="upload-scenario", children=dbc.Button("Upload .xlsx/.numbers", color="outline-primary", size="sm", className="ms-2"), accept=".xlsx,.numbers"),
             ], width="auto", className="ms-auto d-flex align-items-center"),
             dbc.Toast(id="toast", header="Notice", is_open=False, dismissable=True, duration=4000, icon=None),
         ], id="app-bar", className="mb-3 align-items-center"),
@@ -273,6 +278,10 @@ def build_layout():
                 ], id="collapse-guardrails", is_open=False),
 
         ]), id="div-view-plan", style={"display": "none"}),
+
+        # Theme sync target — clientside_callback repaints Plotly charts into
+        # this dummy node's output whenever a figure changes (see callbacks.py).
+        html.Div(id="theme-sync", style={"display": "none"}),
 
         # Hidden stores
         dcc.Store(id="store-active-view", storage_type="memory", data="dashboard"),

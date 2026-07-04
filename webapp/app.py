@@ -19,6 +19,19 @@ def create_app() -> Dash:
     app.title = "Retirement Simulator"
     app.layout = build_layout()
     callbacks.register_callbacks(app)
+
+    # Set data-bs-theme before first paint (persisted choice, else OS preference)
+    # so the page never flashes light-then-dark on load.
+    app.index_string = app.index_string.replace(
+        "</head>",
+        """<script>(function(){
+            var t = localStorage.getItem('theme');
+            if (t !== 'light' && t !== 'dark') {
+                t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+            }
+            document.documentElement.setAttribute('data-bs-theme', t);
+        })();</script></head>""",
+    )
     return app
 
 
