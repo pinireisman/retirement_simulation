@@ -351,11 +351,9 @@ def scenario_to_xlsx(scenario: dict, path) -> None:
         df.to_excel(writer, sheet_name="Sheet1", index=False)
 
 
-def scenario_from_xlsx(path) -> dict:
-    """Convert xlsx data back to scenario dict format."""
-    
-    # Read the Excel file
-    df = pd.read_excel(path, engine="openpyxl")
+def _scenario_from_df(df) -> dict:
+    """All of scenario_from_xlsx's existing body, unchanged, operating on
+    an already-loaded DataFrame instead of a path."""
     
     # Extract portfolio data from first row
     portfolio = {
@@ -480,3 +478,28 @@ def scenario_from_xlsx(path) -> dict:
         })
     
     return scenario
+
+
+def scenario_from_xlsx(path) -> dict:
+    """Convert xlsx data back to scenario dict format."""
+    df = pd.read_excel(path, engine="openpyxl")
+    return _scenario_from_df(df)
+
+
+def scenario_from_numbers(path) -> dict:
+    """Convert an Apple Numbers file back to scenario dict format."""
+    from numbers_parser import Document
+    doc = Document(path)
+    table = doc.sheets[0].tables[0]
+    rows = table.rows()
+    headers = [cell.value for cell in rows[0]]
+    data = [[cell.value for cell in row] for row in rows[1:]]
+    df = pd.DataFrame(data, columns=headers)
+    return _scenario_from_df(df)
+
+
+def scenario_from_file(path) -> dict:
+    """Dispatch to the xlsx or Numbers loader based on file extension."""
+    if str(path).lower().endswith(".numbers"):
+        return scenario_from_numbers(path)
+    return scenario_from_xlsx(path)

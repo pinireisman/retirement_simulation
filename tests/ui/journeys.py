@@ -45,19 +45,66 @@ def upload_scenario(page: Page, xlsx_path: str) -> None:
     expect_toast(page, "loaded")
 
 
-def save_scenario(page: Page, name: str, overwrite: bool = False) -> None:
-    page.locator("#btn-save").click()
-    expect(page.locator("#modal-save")).to_be_visible()
+def save_scenario(page: Page, name: str, overwrite: bool = False) -> str:
+    """Save the current scenario via the Save modal; return the feedback text.
+
+    The overwrite checkbox only appears once a file with this name exists, so
+    it is checked only when visible. On a name conflict without overwrite the
+    app leaves the modal open with a danger toast — the returned text lets the
+    caller assert on that ("exists"/"overwrite") the way a user would read it.
+    """
+    modal = page.locator("#modal-save")
+    # A prior conflict can leave the modal already open; only then skip re-clicking
+    # Save (btn-save sits behind the modal backdrop). When the modal is closed,
+    # clear any lingering toast first so the text we read back is this save's.
+    if not modal.is_visible():
+        _dismiss_toast(page)
+        page.locator("#btn-save").click()
+        expect(modal).to_be_visible()
     page.locator("#input-save-name").fill(name)
-    if overwrite:
-        page.locator("#chk-overwrite").check()
+    if overwrite and page.locator("#div-overwrite-checkbox").is_visible():
+        box = page.locator("#chk-overwrite")
+        box.check()
+        # Let the checkbox's value prop sync to Dash's store before the confirm
+        # callback reads it as State (otherwise it reads the old False).
+        expect(box).to_be_checked()
+        page.wait_for_timeout(200)
     page.locator("#btn-save-confirm").click()
+    # A successful save closes the modal; a conflict/error leaves it open with a
+    # danger toast. Wait for whichever settles so we don't read a stale toast.
+    toast = page.locator("#toast")
+    for _ in range(50):
+        page.wait_for_timeout(100)
+        if not modal.is_visible():
+            break  # saved
+        txt = toast.inner_text().lower() if toast.is_visible() else ""
+        if any(w in txt for w in ("exist", "overwrite", "cannot", "error")):
+            break  # rejected, modal stays open
+    return expect_toast(page)
+
+
+def scenario_in_load_list(page: Page, name: str) -> bool:
+    """Open the app-bar Load dropdown and report whether `name` is listed."""
+    page.locator("#dd-load-scenario").click()
+    # COUPLING: the app-bar dcc.Dropdown renders its open options as elements
+    # with role=option (dash-dropdown markup, distinct from the dash_table
+    # in-cell dropdowns which use react-select's .Select-menu-outer).
+    try:
+        expect(page.get_by_role("option").first).to_be_visible(timeout=5_000)
+        found = page.get_by_role("option", name=re.compile(re.escape(name))).count() > 0
+    finally:
+        page.keyboard.press("Escape")
+    return found
 
 
 def load_scenario(page: Page, name: str) -> None:
     """Pick a scenario in the app-bar dropdown and click Load."""
+    _dismiss_toast(page)
     page.locator("#dd-load-scenario").click()
-    page.get_by_role("option", name=re.compile(name)).click()
+    # Options are refreshed on an interval after a reload; wait for them.
+    option = page.get_by_role("option", name=re.compile(re.escape(name)))
+    expect(option).to_be_visible(timeout=10_000)
+    option.click()
     page.locator("#btn-load").click()
     expect_toast(page, "loaded")
 
@@ -184,25 +231,67 @@ def expect_toast(page: Page, containing: str = "", timeout: int = 10_000) -> str
     return toast.inner_text()
 
 
+def _dismiss_toast(page: Page) -> None:
+    """Close the notice toast if one is showing (so the next read is fresh).
+
+    Best-effort: a toast mid-fade can be unclickable, so failures are ignored
+    rather than allowed to stall the caller.
+    """
+    toast = page.locator("#toast")
+    if not toast.is_visible():
+        return
+    try:
+        # COUPLING: dbc.Toast(dismissable=True) renders a header close button.
+        page.locator("#toast button.btn-close").click(timeout=2_000)
+        expect(toast).to_be_hidden(timeout=2_000)
+    except Exception:
+        pass
+
+
 # ---------- playground ----------
 
+def enable_historic(page: Page) -> None:
+    """Toggle the historic scenarios switch."""
+    # dbc.Switch renders as a label with a checkbox input
+    page.locator("label[for='switch-historic'], #switch-historic").first.click()
+
+
 def enable_playground(page: Page) -> None:
-    page.locator("#switch-playground label, label[for*='switch-playground']").first.click()
+    # The playground switch lives in the Plan view, below the tabs.
+    goto_view(page, "plan")
+    # COUPLING: dbc.Switch renders a visually-hidden checkbox + a clickable
+    # <label for=...>; click the label (the input itself is opacity:0).
+    page.locator("label[for='switch-playground']").click()
     expect(page.locator("#banner-playground")).to_be_visible()
 
 
-def add_playground_event(page: Page, amount: int, label: str = "test event") -> None:
-    """Click a bar on the preview chart, fill the modal, confirm."""
-    plot = page.locator(f"{PREVIEW} .js-plotly-plot")
-    box = plot.bounding_box()
-    # COUPLING: Plotly click events need a hit on a rendered bar; bars span the
-    # full age axis just above/below the zero line, so mid-plot clicks land.
-    for frac_y in (0.45, 0.5, 0.55, 0.4):
-        page.mouse.click(box["x"] + box["width"] * 0.5, box["y"] + box["height"] * frac_y)
-        if page.locator("#modal-playground").is_visible():
-            break
+def add_playground_event(page: Page, amount: int, label: str = "test event",
+                         age: int = 60) -> None:
+    """Open the add-event modal at `age`, fill it, and confirm.
+
+    The app opens the modal from the preview graph's ``clickData`` (the user
+    clicks a bar to pick an age). Pixel-clicking a Plotly filled-area trace is
+    unreliable, so we emit the same ``plotly_click`` event Dash listens for —
+    the exact signal a real bar click produces — with the target age.
+    """
+    # COUPLING: dcc.Graph updates its clickData prop from Plotly's plotly_click
+    # event; emitting it on the graph div drives the same callback a click does.
+    page.evaluate(
+        """([sel, age]) => {
+            const gd = document.querySelector(sel + ' .js-plotly-plot');
+            gd.emit('plotly_click', {points: [{x: age, y: 0, curveNumber: 0,
+                                               pointNumber: 0}]});
+        }""",
+        [PREVIEW, age],
+    )
     expect(page.locator("#modal-playground")).to_be_visible()
     page.locator("#input-pg-amount").fill(str(amount))
     page.locator("#input-pg-label").fill(label)
     page.locator("#btn-pg-confirm").click()
     expect(page.locator("#modal-playground")).not_to_be_visible()
+
+
+def clear_playground_events(page: Page) -> None:
+    """Click Clear all and wait for the chips container to empty."""
+    page.locator("#btn-pg-clear").click()
+    expect(page.locator("#div-playground-chips")).to_be_empty()

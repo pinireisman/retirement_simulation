@@ -518,15 +518,15 @@ def register_callbacks(app) -> None:
             content_type, content_string = contents.split(',')
             decoded = base64.b64decode(content_string)
 
-            # Write to temporary file
-            with NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp_file:
+            # Write to temporary file using the real file extension
+            with NamedTemporaryFile(suffix=Path(filename).suffix.lower(), delete=False) as tmp_file:
                 tmp_file.write(decoded)
                 tmp_path = tmp_file.name
 
             try:
-                # Read the scenario from xlsx
-                from engine.params import scenario_from_xlsx
-                scenario = scenario_from_xlsx(tmp_path)
+                # Read the scenario from file (using new dispatcher)
+                from engine.params import scenario_from_file
+                scenario = scenario_from_file(tmp_path)
 
                 # Set the name from filename (without extension)
                 scenario["name"] = Path(filename).stem
