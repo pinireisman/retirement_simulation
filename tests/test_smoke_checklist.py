@@ -36,12 +36,16 @@ def test_save_then_load_roundtrips(tmp_path):
 
 
 def test_run_simulation_returns_figure_and_ruin_badge():
-    # item 4: Run Simulation -> figure + ruin probability
-    run_id, figure, summary, badges, guardrail_stats = execute_run(
+    # item 4: Run Simulation -> per-panel figures + ruin probability (R5:
+    # execute_run returns a dict of panel figures, not one monolith figure).
+    run_id, figures, summary, badges, guardrail_stats = execute_run(
         SCENARIO, {"guardrails": []}, [], include_historic=False,
     )
     assert run_id
-    assert figure is not None
+    assert figures["cash_flow"] is not None
+    assert figures["portfolio"] is not None
+    assert figures["draw"] is not None
+    assert figures["historic"] == []
     assert 0.0 <= summary["ruin_probability"] <= 1.0
     assert badges == []  # no playground events, no guardrails -> baseline run
     assert guardrail_stats is None

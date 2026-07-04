@@ -18,6 +18,9 @@ venv/
 # Personal scenario data
 scenarios/*.xlsx
 
+# UI test run artifacts
+artifacts/
+
 # Session/agent tooling
 .claude/
 .studio-core/

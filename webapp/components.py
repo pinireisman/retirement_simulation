@@ -1,0 +1,134 @@
+from dash import dcc, html, dash_table
+import dash_bootstrap_components as dbc
+import plotly.graph_objects as go
+from engine.theme import PLOTLY_TEMPLATE, INK, SUCCESS, WARNING, DANGER
+
+
+def build_panel(title, children):
+    """Wrap children in a dbc.Card with md-panel class and optional title."""
+    card_body = [dbc.CardBody(children)]
+    
+    # Add title if provided
+    if title:
+        card_body = [html.H5(title)] + card_body
+    
+    return dbc.Card(card_body, className="md-panel")
+
+
+def build_data_table(id, columns, category_col=None, **table_kwargs):
+    """Build a shared dash_table.DataTable with consistent styling."""
+    
+    # Common style dicts (byte-identical across all tables)
+    style_header = {
+        "backgroundColor": "var(--md-surface-2)", "fontWeight": "500",
+        "textTransform": "uppercase", "fontSize": "0.78rem",
+        "color": "var(--ink)", "border": "none",
+    }
+
+    style_cell = {
+        "fontFamily": "Roboto, sans-serif", "padding": "10px 12px",
+        "backgroundColor": "var(--md-surface-1)", "color": "var(--ink)",
+        "border": "none",
+    }
+    
+    # Build style_data_conditional and dropdown if category_col is provided
+    style_data_conditional = []
+    dropdown = {}
+    
+    if category_col:
+        from engine.figures import CATEGORY_COLORS
+        
+        # Create conditional styles for each category
+        for cat in CATEGORY_COLORS.keys():
+            style_data_conditional.append({
+                "filter_query": '{' + category_col + '} = "' + cat + '"',
+                "column_id": category_col,
+                "backgroundColor": CATEGORY_COLORS[cat] + " !important",
+                "color": "white"
+            })
+        
+        # Create dropdown options
+        dropdown = {
+            category_col: {
+                "options": [
+                    {"label": c, "value": c} for c in CATEGORY_COLORS.keys()
+                ]
+            }
+        }
+    
+    # Build the table with all parameters
+    table_config = {
+        "id": id,
+        "columns": columns,
+        "data": [],
+        "editable": True,
+        "row_deletable": True,
+        "style_header": style_header,
+        "style_cell": style_cell,
+    }
+    
+    if style_data_conditional:
+        table_config["style_data_conditional"] = style_data_conditional
+    
+    if dropdown:
+        table_config["dropdown"] = dropdown
+        
+    # Add any additional kwargs
+    for key, value in table_kwargs.items():
+        table_config[key] = value
+    
+    return dash_table.DataTable(**table_config)
+
+
+def build_stat_tile(label, value, tone=None, hero=False):
+    """Build a stat tile with label and value."""
+    # Determine text color based on tone
+    color = INK
+    if tone == "success":
+        color = SUCCESS
+    elif tone == "borderline":
+        color = WARNING
+    elif tone == "danger":
+        color = DANGER
+    
+    # Determine font size based on hero flag
+    font_size = "2rem" if hero else "1.5rem"
+    
+    return dbc.Card([
+        dbc.CardBody([
+            html.Span(label.upper(), className="small text-muted"),
+            html.H3(value, style={"color": color, "fontSize": font_size})
+        ])
+    ])
+
+
+def build_badge_row(items):
+    """Build a row of badges from items list."""
+    badges = []
+    
+    for item in items:
+        if isinstance(item, str):
+            # Plain string badge
+            badges.append(dbc.Badge(str(item), color="secondary", className="me-1"))
+        elif isinstance(item, dict):
+            # Dict with text, color, and optional id
+            badge_kwargs = {
+                "children": item["text"],
+                "color": item.get("color", "secondary"),
+                "className": "me-1"
+            }
+            
+            if "id" in item:
+                badge_kwargs["id"] = item["id"]
+                
+            badges.append(dbc.Badge(**badge_kwargs))
+    
+    return badges
+
+
+def build_chart_card(title, graph_id, figure=None):
+    """Build a chart card with title and graph."""
+    if figure is None:
+        figure = go.Figure(layout={"template": PLOTLY_TEMPLATE})
+    
+    return build_panel(title, [dcc.Graph(id=graph_id, figure=figure)])

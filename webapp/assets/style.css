@@ -1,23 +1,40 @@
 :root {
-  --category-strict: #B71C1C;
-  --category-lifestyle: #F06292;
-  --category-gifts: #8E44AD;
-  --playground-color: #FF9800;
+  /* Canonical design tokens — PRD §3.1. Mirror engine/theme.py hexes by hand. */
+  --canvas: #F6F8FC;
+  --surface: #FFFFFF;
+  --ink: #1F2933;
+  --ink-2: rgba(31, 41, 51, .64);
+  --primary: #3949AB;
+  --primary-hover: #303F9F;
+  --success: #2E7D32;
+  --warning: #B26A00;
+  --danger: #C62828;
 
-  /* Material Design dark theme tokens */
-  --bs-body-bg: #121212;
-  --bs-body-color: rgba(255, 255, 255, .87);
-  --bs-border-color: rgba(255, 255, 255, .12);
-  --bs-primary: #90CAF9;
-  --bs-primary-rgb: 144, 202, 249;
-  --bs-secondary: #CE93D8;
-  --md-surface-0: #121212;
-  --md-surface-1: #1e1e1e;
-  --md-surface-2: #232323;
-  --md-surface-3: #262626;
-  --md-surface-4: #282828;
-  --md-radius-sm: 4px;
-  --md-radius-md: 8px;
+  --category-strict: #B71C1C;
+  --category-lifestyle: #D81B60;
+  --category-gifts: #8E44AD;
+  --playground-color: #E65100;
+
+  --wash-neutral: #E7DEFF;
+  --wash-success: #D7EEEC;
+  --wash-borderline: #CFE8FF;
+  --wash-danger: #FCDEDE;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-pill: 24px;
+
+  /* BOOTSTRAP is already a light theme — just repoint brand + surface colors. */
+  --bs-body-bg: var(--canvas);
+  --bs-body-color: var(--ink);
+  --bs-border-color: rgba(31, 41, 51, .08);
+  --bs-primary: var(--primary);
+  --bs-primary-rgb: 57, 73, 171;
+
+  /* Compat bridge for webapp/layout.py inline DataTable styles — removed
+     once R3 replaces those 4x-duplicated dicts with build_data_table(). */
+  --md-surface-1: var(--surface);
+  --md-surface-2: var(--canvas);
 }
 
 body, .btn, .form-control, .nav-link, h1, h2, h3, h4, h5, h6 {
@@ -25,56 +42,44 @@ body, .btn, .form-control, .nav-link, h1, h2, h3, h4, h5, h6 {
 }
 
 body {
-  background: var(--md-surface-0);
+  background: var(--canvas);
 }
 
 /* Elevated panel — used to wrap the builder/results columns */
 .md-panel {
-  background: var(--md-surface-1);
-  border-radius: var(--md-radius-md);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, .5), 0 1px 2px rgba(0, 0, 0, .6);
+  background: var(--surface);
+  border: 1px solid rgba(31, 41, 51, .08);
+  border-radius: var(--radius-md);
+  box-shadow: 0 1px 3px rgba(31, 41, 51, .10), 0 1px 2px rgba(31, 41, 51, .06);
   padding: 16px;
   margin-bottom: 16px;
 }
 
 .nav-tabs .nav-link {
-  border-radius: var(--md-radius-sm) var(--md-radius-sm) 0 0;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  font-size: 0.9rem;
 }
 
 .modal-content {
-  border-radius: var(--md-radius-md);
+  border-radius: var(--radius-md);
 }
 
-/* DataTable dark restyle */
+/* Rounded table corners WITHOUT overflow:hidden — clipping the container
+   swallowed the category-column dropdown menu, which renders inside it
+   (the "Category is not really a drop down" bug). Round the corner cells
+   themselves instead. */
 .dash-table-container, .dash-spreadsheet-container {
-  border-radius: var(--md-radius-sm);
-  overflow: hidden;
+  border-radius: var(--radius-sm);
 }
-.dash-spreadsheet-container td, .dash-spreadsheet-container th {
-  background-color: var(--md-surface-1) !important;
-  color: rgba(255, 255, 255, .87) !important;
-  border: none !important;
-  border-bottom: 1px solid rgba(255, 255, 255, .12) !important;
-}
-.dash-spreadsheet-container tr:hover td {
-  background-color: var(--md-surface-2) !important;
-}
-
-/* Dropdown (dash-dropdown, Radix-based) dark restyle */
-.dash-dropdown {
-  background-color: var(--md-surface-1) !important;
-  border-color: rgba(255, 255, 255, .12) !important;
-  color: rgba(255, 255, 255, .87) !important;
-}
-.dash-dropdown-value, .dash-dropdown-placeholder, .dash-dropdown-trigger-icon {
-  color: rgba(255, 255, 255, .87) !important;
-}
-.dash-dropdown-menu, .dash-dropdown-option {
-  background-color: var(--md-surface-1) !important;
-  color: rgba(255, 255, 255, .87) !important;
-}
-.dash-dropdown-option[data-highlighted] {
-  background-color: var(--md-surface-2) !important;
+.dash-spreadsheet-inner table tr:first-child th:first-child { border-top-left-radius: var(--radius-sm); }
+.dash-spreadsheet-inner table tr:first-child th:last-child { border-top-right-radius: var(--radius-sm); }
+.dash-spreadsheet-inner table tr:last-child td:first-child { border-bottom-left-radius: var(--radius-sm); }
+.dash-spreadsheet-inner table tr:last-child td:last-child { border-bottom-right-radius: var(--radius-sm); }
+/* Canonical Dash fix: the dropdown cell's menu is display:none'd / stacked
+   under neighbors by default in some dash_table versions. */
+.dash-table-container .Select-menu-outer {
+  display: block !important;
+  z-index: 1000;
 }
 
 /* Slider handle/track recolor to match primary */
@@ -85,17 +90,15 @@ body {
   border-color: var(--bs-primary);
 }
 
-/* Primary Run buttons — Material raised look */
+/* Primary Run buttons — pill shape per §3.3 */
 #btn-run, #btn-run-playground {
-  text-transform: uppercase;
-  letter-spacing: .03em;
+  border-radius: var(--radius-pill);
   font-weight: 500;
-  border-radius: var(--md-radius-sm);
-  box-shadow: 0 3px 6px rgba(0, 0, 0, .4), 0 3px 6px rgba(0, 0, 0, .5);
+  box-shadow: 0 1px 3px rgba(31, 41, 51, .10), 0 1px 2px rgba(31, 41, 51, .06);
   transition: box-shadow .15s ease-in-out;
 }
 #btn-run:hover, #btn-run-playground:hover {
-  box-shadow: 0 10px 20px rgba(0, 0, 0, .5), 0 6px 6px rgba(0, 0, 0, .6);
+  box-shadow: 0 4px 10px rgba(31, 41, 51, .16), 0 2px 4px rgba(31, 41, 51, .10);
 }
 
 /* Material ripple */
@@ -107,49 +110,154 @@ body {
   position: absolute;
   border-radius: 50%;
   transform: scale(0);
-  background-color: rgba(255, 255, 255, .35);
+  background-color: rgba(57, 73, 171, .25);
   animation: ripple-anim 600ms linear;
   pointer-events: none;
 }
 @keyframes ripple-anim {
   to { transform: scale(4); opacity: 0; }
 }
-
-/* Tab styling */
-.nav-tabs .nav-link {
-  font-size: 0.9rem;
+@media (prefers-reduced-motion: reduce) {
+  .ripple { animation: none; display: none; }
 }
 
-/* Layout spacing */
 .container-fluid {
   padding: 0;
 }
 
 /* Playground banner */
 #banner-playground {
-  background-color: rgba(255, 152, 0, .16);
-  border: 1px solid rgba(255, 152, 0, .4);
-  color: rgba(255, 255, 255, .87);
+  background-color: rgba(230, 81, 0, .12);
+  border: 1px solid rgba(230, 81, 0, .4);
+  color: var(--playground-color);
   padding: 8px 12px;
   margin-bottom: 10px;
-  border-radius: var(--md-radius-sm);
+  border-radius: var(--radius-sm);
   font-size: 0.9rem;
 }
 
 /* Guardrails panel */
 #btn-guardrails-header {
   font-weight: bold;
-  background-color: var(--md-surface-2);
-  border: 1px solid rgba(255, 255, 255, .12);
-  border-radius: var(--md-radius-sm);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, .5), 0 1px 2px rgba(0, 0, 0, .6);
+  background-color: var(--surface);
+  border: 1px solid rgba(31, 41, 51, .08);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 1px 3px rgba(31, 41, 51, .10), 0 1px 2px rgba(31, 41, 51, .06);
   margin-bottom: 10px;
 }
 
-/* Toast positioning */
+/* Toast positioning — bottom-right stays clear of form fields and buttons
+   on every tab (top-right clipped the End Age field and the playground
+   run button, R6 QA). */
 #toast {
   position: fixed;
-  top: 20px;
+  bottom: 20px;
   right: 20px;
   z-index: 1050;
+}
+
+/* dbc.themes.BOOTSTRAP is a precompiled bundle whose .btn-primary /
+   .btn-outline-primary rules hardcode Bootstrap's stock blue instead of
+   referencing --bs-primary, so the :root token override above never reaches
+   buttons (R6 QA — every "primary" button/toggle rendered generic
+   Bootstrap blue, not the brand indigo). Recolor the variants explicitly. */
+.btn-primary, .btn-outline-primary.active {
+  background-color: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+.btn-primary:hover, .btn-outline-primary.active:hover {
+  background-color: var(--primary-hover);
+  border-color: var(--primary-hover);
+}
+/* .btn-check:checked + .btn has 3 selector-classes worth of specificity in
+   Bootstrap's own compiled CSS, beating the plain .btn-outline-primary.active
+   rule above — match it here so the dbc RadioItems pill toggle picks up the
+   brand color when checked (R6 QA). */
+.btn-check:checked + .btn.btn-outline-primary {
+  background-color: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+.btn-outline-primary {
+  color: var(--primary);
+  border-color: var(--primary);
+}
+.btn-outline-primary:hover {
+  background-color: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+/* Dashboard/Plan pill toggle (R4) */
+.view-toggle {
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+/* dbc.RadioItems wraps each radio in a .form-check div whose own width/border
+   styles defeat Bootstrap's .btn-check clip-to-nothing hiding (R6 QA) — a
+   sliver of the raw input was peeking out past the "Plan" pill. */
+.view-toggle .form-check-input {
+  clip: rect(0, 0, 0, 0) !important;
+  position: absolute !important;
+}
+/* The rightmost pill label keeps Bootstrap's own 6px button radius, smaller
+   than the container's 24px pill clip — the mismatch let a flat sliver of
+   the label's own straight border show past the rounded corner (R6 QA). */
+.view-toggle .form-check:first-child .form-check-label {
+  border-radius: var(--radius-pill) 0 0 var(--radius-pill);
+}
+.view-toggle .form-check:last-child .form-check-label {
+  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
+}
+
+/* Verdict atmosphere (§3.4) — one class swap on the dashboard wrapper,
+   driven by the tone the engine already computes. */
+.wash-neutral, .wash-success, .wash-borderline, .wash-danger {
+  background-repeat: no-repeat;
+  background-size: 100% 320px;
+  transition: background .5s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .wash-neutral, .wash-success, .wash-borderline, .wash-danger { transition: none; }
+}
+.wash-neutral    { background-image: linear-gradient(to bottom, var(--wash-neutral) 0%, var(--canvas) 100%); }
+.wash-success    { background-image: linear-gradient(to bottom, var(--wash-success) 0%, var(--canvas) 100%); }
+.wash-borderline { background-image: linear-gradient(to bottom, var(--wash-borderline) 0%, var(--canvas) 100%); }
+.wash-danger     { background-image: linear-gradient(to bottom, var(--wash-danger) 0%, var(--canvas) 100%); }
+
+/* Labels/overlines per §3.2 */
+.overline {
+  font-weight: 500;
+  font-size: 12px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+/* Hero numeral (§3.4) */
+.hero-numeral {
+  font-family: "Roboto", sans-serif;
+  font-weight: 300;
+  font-size: 64px;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+/* Bootstrap's .btn/.form-check-input :focus-visible rules zero out the
+   outline in favor of a box-shadow ring that isn't rendering here (R6 QA) —
+   force a visible ring back on regardless of cause. */
+.btn:focus-visible, .form-check-input:focus-visible {
+  outline: 2px solid var(--primary) !important;
+  outline-offset: 2px;
+}
+
+/* dash_table's inner cell wrapper carries its own default text color,
+   not covered by the DataTable style_cell prop (R5 follow-up). */
+.dash-cell-value {
+  color: var(--ink) !important;
 }

@@ -12,8 +12,8 @@ def create_app() -> Dash:
     app = Dash(
         __name__,
         external_stylesheets=[
-            dbc.themes.DARKLY,
-            "https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap",
+            dbc.themes.BOOTSTRAP,
+            "https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&family=Roboto+Mono:wght@400;500&display=swap",
         ],
     )
     app.title = "Retirement Simulator"

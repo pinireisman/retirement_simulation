@@ -20,13 +20,19 @@ import dash_bootstrap_components as dbc
 import numpy as np
 from dash import ALL, Input, Output, State, ctx, html, no_update
 
-from engine.figures import PLAYGROUND_COLOR, build_cash_flow_series, net_cash_flow, plot_cash_flow, plot_with_historic
+from engine.figures import (
+    PLAYGROUND_COLOR, build_cash_flow_series, net_cash_flow,
+    fig_cash_flow, fig_portfolio, fig_draw, fig_historic, get_ruin_explanation,
+)
 from engine.guardrails import parse_guardrail_configs
 from engine.historic_returns import historical_stress_real_factors_70_30
 from engine.params import SimulationParams, validate_scenario
 from engine.simulation import run_historic_scenario, run_simulation
+from engine.theme import PLOTLY_TEMPLATE, SERIES_NET_CASH_FLOW, SUCCESS, WARNING, DANGER, tone_for_ruin
+from webapp.components import build_stat_tile, build_badge_row, build_chart_card
 
-_GUARDRAIL_DISPLAY_NAMES = {"volatility_discretionary_scaling": "G1"}
+_GUARDRAIL_DISPLAY_NAMES = {"volatility_discretionary_scaling": "Spending guardrail"}
+_TONE_COLOR = {"success": SUCCESS, "borderline": WARNING, "danger": DANGER}
 
 # PRD §5.1: cache raw run results by run_id, evicting the oldest once more
 # than 5 accumulate (single-process/single-user app, PRD §3.2).
@@ -80,7 +86,7 @@ def _preview_figure(scenario: dict, playground_events: list | None):
         )
     net = net_cash_flow(series, ages_for_plotting)
     fig.add_scatter(x=ages_for_plotting, y=net, mode="lines", name="Net cash-flow",
-                     line=dict(color="#EEEEEE"))
+                     line=dict(color=SERIES_NET_CASH_FLOW))
 
     for ev in playground_events or []:
         age, amount, label = ev["age"], ev["amount"], ev.get("label", "Playground")
@@ -92,29 +98,28 @@ def _preview_figure(scenario: dict, playground_events: list | None):
 
     fig.update_layout(
         barmode="relative",
-        template="plotly_dark",
+        template=PLOTLY_TEMPLATE,
         title="Cash-flow preview",
         xaxis_title="Age",
         yaxis_title="₪ / year (real)",
         legend=dict(orientation="h", y=-0.25),
         margin=dict(t=40, b=40),
+        # Constant uirevision keeps the user's zoom/pan across the live
+        # re-renders triggered by every table edit.
+        uirevision="preview",
     )
     return fig
 
 
 def _playground_chips(playground_events: list | None):
-    chips = []
+    items = []
     for ev in playground_events or []:
         sign = "+" if ev["amount"] >= 0 else "−"
         text = f"age {ev['age']} · {sign}₪{abs(ev['amount']):,.0f} · {ev.get('label', '')}"
-        chips.append(
-            dbc.Badge(
-                [text, html.Span(" ×", id={"type": "pg-remove", "index": ev["id"]},
-                                  style={"cursor": "pointer", "marginLeft": "6px"})],
-                color="warning", className="me-1",
-            )
-        )
-    return chips
+        remove_x = html.Span(" ×", id={"type": "pg-remove", "index": ev["id"]},
+                              style={"cursor": "pointer", "marginLeft": "6px"})
+        items.append({"text": [text, remove_x], "color": "warning"})
+    return build_badge_row(items)
 
 
 def _banner_style(playground_on: bool):
@@ -130,28 +135,27 @@ def _format_historic_name(key: str) -> str:
 
 def _result_badges(badges: list[str]):
     if not badges:
-        return [dbc.Badge("Baseline run", color="secondary")]
-    return [dbc.Badge(b, color="warning", className="me-1") for b in badges]
+        return build_badge_row([{"text": "Baseline run", "color": "secondary"}])
+    return build_badge_row([{"text": b, "color": "warning"} for b in badges])
 
 
-def _summary_cards(summary: dict, guardrail_stats: dict | None = None):
-    ruin = summary["ruin_probability"]
-    cards = [
-        html.H4(f"Ruin probability: {ruin:.3%}"),
-        html.Div(f"Median portfolio: ₪{summary['portfolio_median']:,.0f}"),
-        html.Div(f"Median property: ₪{summary['property_median']:,.0f}"),
-        html.Div(f"Median estate: ₪{summary['estate_median']:,.0f}"),
+def _stat_tiles(summary: dict, guardrail_stats: dict | None = None):
+    tiles = [
+        build_stat_tile("Median portfolio", f"₪{summary['portfolio_median']:,.0f}"),
+        build_stat_tile("Median property", f"₪{summary['property_median']:,.0f}"),
+        build_stat_tile("Median estate", f"₪{summary['estate_median']:,.0f}"),
     ]
     if guardrail_stats:
         name = _GUARDRAIL_DISPLAY_NAMES.get(guardrail_stats["type"], guardrail_stats["type"])
         adj = guardrail_stats["median_adjustment"]
-        sign = "-" if adj < 0 else ""
-        cards.append(html.Div(
-            f"Guardrail {name}: fired on {guardrail_stats['frac_paths_triggered']:.0%} of paths "
-            f"(cut {guardrail_stats['frac_paths_cut']:.0%} · raised {guardrail_stats['frac_paths_raised']:.0%}) "
-            f"· median adjustment {sign}₪{abs(adj):,.0f}/yr"
+        sign = "-" if adj < 0 else "+"
+        tiles.append(build_stat_tile(
+            name,
+            f"{guardrail_stats['frac_paths_triggered']:.0%} fired · {sign}₪{abs(adj):,.0f}/yr",
         ))
-    return cards
+    else:
+        tiles.append(build_stat_tile("Spending guardrail", "Off"))
+    return dbc.Row([dbc.Col(t, width=3) for t in tiles], className="g-2 mb-3")
 
 
 def execute_run(scenario: dict, guardrail_cfg: dict, playground_events: list[dict],
@@ -170,26 +174,30 @@ def execute_run(scenario: dict, guardrail_cfg: dict, playground_events: list[dic
     if playground_events:
         badges.append(f"Includes {len(playground_events)} playground events")
     if guardrails:
-        badges.append("Guardrail G1 active")
+        badges.append("Spending guardrail active")
 
+    historic_figs = []
     if include_historic:
-        historic_results = []
         for key, seq in historical_stress_real_factors_70_30.items():
             r = run_historic_scenario(params, seq["real_factors"], seq.get("property_factors"))
             r["name"] = _format_historic_name(key)
             r["start_year"] = int(seq["years"][0])
             r["end_year"] = int(seq["years"][-1])
-            historic_results.append(r)
-        figure = plot_with_historic(results, historic_results)
-    else:
-        figure = plot_cash_flow(results)
+            historic_figs.append((r["name"], fig_historic(results, r)))
+
+    figures = {
+        "cash_flow": fig_cash_flow(results),
+        "portfolio": fig_portfolio(results),
+        "draw": fig_draw(results),
+        "historic": historic_figs,
+    }
 
     run_id = str(uuid.uuid4())
     RESULTS_CACHE[run_id] = results
     if len(RESULTS_CACHE) > _CACHE_SIZE:
         RESULTS_CACHE.popitem(last=False)
 
-    return run_id, figure, results["summary"], badges, results["guardrail_stats"]
+    return run_id, figures, results["summary"], badges, results["guardrail_stats"]
 
 
 def register_callbacks(app) -> None:
@@ -454,6 +462,18 @@ def register_callbacks(app) -> None:
         """Callback #16."""
         return not is_open
 
+    @app.callback(
+        Output("store-active-view", "data"),
+        Output("div-view-dashboard", "style"),
+        Output("div-view-plan", "style"),
+        Input("view-toggle", "value"),
+    )
+    def toggle_view(view):
+        """R4: Dashboard/Plan pill toggle. Mirrors _banner_style()'s display-dict pattern."""
+        dashboard_style = {"display": "block"} if view == "dashboard" else {"display": "none"}
+        plan_style = {"display": "block"} if view == "plan" else {"display": "none"}
+        return view, dashboard_style, plan_style
+
     # --- callbacks #3-#9 (market info, fat-tail slider, upload/save/load/
     # refresh) are appended below this line by a separate delegated brief. ---
     
@@ -631,6 +651,15 @@ def register_callbacks(app) -> None:
 
     @app.callback(
         Output("graph-results", "figure"),
+        Output("graph-portfolio", "figure"),
+        Output("graph-draw", "figure"),
+        Output("div-historic-cards", "children"),
+        Output("div-chart-cards", "className"),
+        Output("div-chart-placeholder", "className"),
+        Output("hero-numeral", "children"),
+        Output("hero-numeral", "style"),
+        Output("hero-verdict", "children"),
+        Output("div-hero", "className"),
         Output("div-summary", "children"),
         Output("div-result-badges", "children"),
         Output("store-run-id", "data"),
@@ -649,10 +678,30 @@ def register_callbacks(app) -> None:
         """Callback #17. btn-run ignores playground events; btn-run-playground includes them."""
         events = playground_events if ctx.triggered_id == "btn-run-playground" else []
         try:
-            run_id, figure, summary, badges, guardrail_stats = execute_run(
+            run_id, figures, summary, badges, guardrail_stats = execute_run(
                 scenario, guardrail_cfg, events, bool(include_historic)
             )
         except Exception as exc:
-            return (no_update, no_update, no_update, no_update,
-                    f"Error running simulation: {exc}", True, "danger")
-        return figure, _summary_cards(summary, guardrail_stats), _result_badges(badges), run_id, no_update, False, no_update
+            return (no_update,) * 13 + (f"Error running simulation: {exc}", True, "danger")
+
+        ruin = summary["ruin_probability"]
+        tone = tone_for_ruin(ruin)
+        n_paths = scenario["portfolio"]["n_paths"]
+        n_success = round((1 - ruin) * n_paths)
+        historic_cards = [
+            build_chart_card(name, f"graph-historic-{i}", figure=fig)
+            for i, (name, fig) in enumerate(figures["historic"])
+        ]
+        # Constant uirevision so zoom/pan survives re-runs (matches preview).
+        for key in ("cash_flow", "portfolio", "draw"):
+            figures[key].update_layout(uirevision="results")
+
+        return (
+            figures["cash_flow"], figures["portfolio"], figures["draw"], historic_cards,
+            "", "d-none",
+            f"{1 - ruin:.1%}", {"color": _TONE_COLOR[tone]},
+            f"Your plan holds in {n_success:,} of {n_paths:,} simulated futures.",
+            f"wash-{tone} p-4 mb-3",
+            _stat_tiles(summary, guardrail_stats), _result_badges(badges), run_id,
+            "Simulation complete", True, "success",
+        )

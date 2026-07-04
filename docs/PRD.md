@@ -562,25 +562,33 @@ badge `"Historic scenarios: 5"`. No badges → render `"Baseline run"`.
 
 ## 6. Component Breakdown
 
-### 6.1 Page layout (single page)
+> **§6.1–6.3 reflect the shipped redesign** (see [REDESIGN_PRD.md](REDESIGN_PRD.md) for the full design
+> spec: light theme, tokens, copy rules). The state model (§6.4 stores) and callback contracts (§5)
+> remain binding and unchanged by the redesign.
+
+### 6.1 Page layout (app bar + Dashboard/Plan views)
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│ Header: app title · scenario name (+dirty dot) · Save As ·   │
-│         Load ▾ · Upload .xlsx                                │
-├──────────────────────────────┬───────────────────────────────┤
-│ LEFT COLUMN (builder, 40%)   │ RIGHT COLUMN (results, 60%)   │
-│ ┌──────────────────────────┐ │  Run Simulation ▶             │
-│ │ Tabs: Portfolio Spending │ │  Run with playground events ▶ │
-│ │  Income Lumps Properties │ │  ☐ Include historic scenarios │
-│ └──────────────────────────┘ │  [badges row]                 │
-│ Playground switch ◯          │  [summary cards: ruin %,      │
-│ graph-preview (cash-flow,    │   median estate, p25/p75]     │
-│  click target, pg chips)     │  graph-results                │
-│ ▸ Guardrails (collapsed)     │  (Cash-flow / Percentiles /   │
-│                              │   Draw / +historic panels)    │
-└──────────────────────────────┴───────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│ APP BAR: app title · scenario name (+dirty dot) · [Dashboard|Plan] │
+│          · Save scenario · Load ▾ · Upload .xlsx                   │
+├────────────────────────────────────────────────────────────────────┤
+│ DASHBOARD view (landing, full width, tone-washed hero band)         │
+│  Chance of success hero (%, verdict line) · Run simulation ·        │
+│  Run with playground events · ☐ Include historic scenarios          │
+│  [Median portfolio] [Median property] [Median estate] [Guardrail]   │ stat tiles
+│  [Cash flow card] [Portfolio & property card]                       │ chart cards
+│  [Annual draw card] [Historic scenario cards, if toggled]           │
+├────────────────────────────────────────────────────────────────────┤
+│ PLAN view (full width, hidden unless selected)                      │
+│  Tabs: Portfolio Spending Income Lumps Properties                   │
+│  Playground switch · graph-preview (cash-flow, click target,        │
+│  pg chips) · ▸ Guardrails (collapsed)                                │
+└────────────────────────────────────────────────────────────────────┘
 ```
+
+`store-active-view` (`dcc.Store`, values `"dashboard"`/`"plan"`) plus one show/hide callback
+(`toggle_view`) switches between the two full-width views — no `dash.Pages`/URL routing.
 
 ### 6.2 Components
 
@@ -593,17 +601,19 @@ badge `"Historic scenarios: 5"`. No badges → render `"Baseline run"`.
 | **Properties tab** | `tbl-properties`: `start_age, initial_value, rent_monthly, label`. Growth µ/σ come from the scenario's market (shown as read-only caption, per-property overrides are out of scope v1). |
 | **Preview chart** | Cash-flow bars by component. Colors (§6.3). Net line black. Playground markers orange. |
 | **Guardrails panel** | G1 block per §2.5 flow. |
-| **Results panel** | Summary cards; badges; one `dcc.Graph` whose figure has 3 subplot rows (+1 per historic scenario when toggled) — a straight port of `plot_cash_flow` / `plot_with_historic` that **returns** the figure instead of calling `fig.show()`, plus the guardrail stats line and the ruin annotation (ℹ️ hover with the existing `get_ruin_explanation` table, green <3% / orange <10% / red otherwise). All axes/tooltips labelled in real ₪ with `₪%{y:,.0f}`-style formats. |
+| **Dashboard hero** | Tone-colored "chance of success" numeral + plain-language verdict line, driven by `engine.theme.tone_for_ruin`/`get_ruin_explanation`; wash-class (`wash-neutral/success/borderline/danger`) applied to the dashboard wrapper. |
+| **Stat tiles** | `build_stat_tile()` cards: median portfolio/property/estate, spending guardrail status. |
+| **Chart cards** | Three independent `dcc.Graph`s (`graph-results` cash flow, `graph-portfolio`, `graph-draw`, each ~420px+ tall, built by `engine.figures.fig_cash_flow`/`fig_portfolio`/`fig_draw`) plus one `build_chart_card` per historic scenario in `div-historic-cards` when the historic toggle is on — replaces the single 3-row (or 3+N-row) subplot monolith. All axes/tooltips labelled in real ₪ with `₪%{y:,.0f}`-style formats; ruin explanation surfaces via the hero, not an in-chart annotation. `div-chart-cards` stays `d-none` until the first run (a one-line `div-chart-placeholder` shows instead), per §3.5's "no disabled ghost charts" — the run callback swaps the two classNames alongside the figures. |
 
-### 6.3 Category color coding (single constant, used by builder tables, preview chart, and results cash-flow panel)
+### 6.3 Category color coding (single source of truth: `engine/theme.py`, mirrored by hand in `webapp/assets/style.css` `:root`)
 
 ```python
 CATEGORY_COLORS = {
     "strict":    "#B71C1C",   # dark red
-    "lifestyle": "#F06292",   # pink
+    "lifestyle": "#D81B60",   # pink, darkened from #F06292 for AA text contrast on the light theme
     "gifts":     "#8E44AD",   # purple
 }
-PLAYGROUND_COLOR = "#FF9800"  # orange
+PLAYGROUND_COLOR = "#E65100"  # orange, darkened from #FF9800 — the raw shade fails contrast on white
 # income bands keep the existing green ramp, rent the blue ramp,
 # positive lumps grey — unchanged from visualization.py
 ```
@@ -623,6 +633,7 @@ distinguishability) instead of the red ramp.
 | Saved scenarios | `scenarios/*.xlsx` server FS | Interop with CLI is the whole point |
 | Raw simulation results (ndarrays) | server `RESULTS_CACHE` | Too big for the browser; only figure JSON crosses the wire |
 | Figures | Plotly figure JSON via `dcc.Graph.figure` callback output | Native Dash transport; no HTML embeds, no image exports |
+| Active view (Dashboard/Plan) | `dcc.Store` memory (browser) | UI-only toggle state; not worth persisting across sessions |
 
 ---
 

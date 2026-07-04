@@ -1,10 +1,13 @@
-from dash import dcc, html, dash_table
+from dash import dcc, html
+from dash.dash_table.Format import Format, Scheme
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 from engine.markets import MARKETS
-from engine.figures import CATEGORY_COLORS
+from engine.theme import PLOTLY_TEMPLATE
+from webapp.components import build_panel, build_data_table, build_chart_card, build_stat_tile
 
-_EMPTY_DARK_FIGURE = go.Figure(layout={"template": "plotly_dark"})
+_EMPTY_FIGURE = go.Figure(layout={"template": PLOTLY_TEMPLATE})
+_MONEY_FORMAT = Format(precision=0, scheme=Scheme.fixed)
 
 DEFAULT_SCENARIO = {
     "$schema": "scenario.v1",
@@ -28,25 +31,90 @@ DEFAULT_SCENARIO = {
 
 def build_layout():
     return dbc.Container([
-        # Header row
+        # App bar
         dbc.Row([
             dbc.Col([
-                html.H2("Retirement Simulator", className="mb-0"),
+                html.H2("Retirement Simulator", className="mb-0 d-inline-block"),
                 html.Span(id="header-scenario-name", children="untitled", className="ms-2"),
-                dbc.Button("Save As…", id="btn-save", color="outline-primary", size="sm"),
+            ], width="auto", className="d-flex align-items-center"),
+            dbc.Col(
+                dbc.RadioItems(
+                    id="view-toggle",
+                    className="view-toggle btn-group",
+                    inputClassName="btn-check",
+                    labelClassName="btn btn-outline-primary",
+                    labelCheckedClassName="active",
+                    options=[
+                        {"label": "Dashboard", "value": "dashboard"},
+                        {"label": "Plan", "value": "plan"},
+                    ],
+                    value="dashboard",
+                ),
+                width="auto",
+            ),
+            dbc.Col([
+                dbc.Button("Save scenario", id="btn-save", color="outline-primary", size="sm"),
                 dbc.Button("Load", id="btn-load", color="outline-primary", size="sm"),
                 dcc.Dropdown(id="dd-load-scenario", options=[], placeholder="Select a scenario…", className="ms-2"),
-                dcc.Upload(id="upload-scenario", children=html.Button("Upload .xlsx", className="ms-2")),
-                dbc.Toast(id="toast", header="Notice", is_open=False, dismissable=True, duration=4000, icon=None, className="position-fixed top-0 end-0 m-2"),
-            ], width=12),
-        ], className="mb-3"),
-        
-        # Main content row
-        dbc.Row([
-            # Left column - Builder
-            dbc.Col(dbc.Card(dbc.CardBody([
+                dcc.Upload(id="upload-scenario", children=dbc.Button("Upload .xlsx", color="outline-primary", size="sm", className="ms-2")),
+            ], width="auto", className="ms-auto d-flex align-items-center"),
+            dbc.Toast(id="toast", header="Notice", is_open=False, dismissable=True, duration=4000, icon=None),
+        ], id="app-bar", className="mb-3 align-items-center"),
+
+        # Dashboard view (landing)
+        html.Div([
+            html.Div([
+                dbc.Row([
+                    dbc.Col([
+                        html.Div("Chance of success", className="overline"),
+                        html.Div("—", id="hero-numeral", className="hero-numeral"),
+                        html.Div("Run a simulation to see how your plan holds up.", id="hero-verdict"),
+                    ], width=6),
+                    dbc.Col([
+                        dbc.Button("Run simulation", id="btn-run", color="primary", className="me-2"),
+                        dbc.Button("Run with playground events", id="btn-run-playground", color="primary", className="me-2"),
+                        html.Div(
+                            dbc.Switch(id="switch-historic", label="Include historic scenarios", value=False),
+                            className="mt-2",
+                        ),
+                    ], width=6),
+                ]),
+            ], id="div-hero", className="wash-neutral p-4 mb-3"),
+
+            html.Div(id="div-result-badges", className="mb-2"),
+            html.Div(
+                id="div-summary",
+                children=[
+                    dbc.Row([
+                        dbc.Col(build_stat_tile("Median portfolio", "—"), width=3),
+                        dbc.Col(build_stat_tile("Median property", "—"), width=3),
+                        dbc.Col(build_stat_tile("Median estate", "—"), width=3),
+                        dbc.Col(build_stat_tile("Spending guardrail", "—"), width=3),
+                    ], className="g-2 mb-3"),
+                ],
+            ),
+
+            html.Div([
+                dbc.Row([
+                    dbc.Col(build_chart_card("Cash flow", "graph-results", figure=_EMPTY_FIGURE), width=6),
+                    dbc.Col(build_chart_card("Portfolio & property", "graph-portfolio"), width=6),
+                ], className="g-3 mb-3"),
+                dbc.Row([
+                    dbc.Col(build_chart_card("Annual draw", "graph-draw"), width=6),
+                    dbc.Col(html.Div(id="div-historic-cards"), width=6),
+                ], className="g-3"),
+            ], id="div-chart-cards", className="d-none"),
+            html.Div(
+                "Charts appear here once you run a simulation.",
+                id="div-chart-placeholder",
+                className="text-center text-muted py-5",
+            ),
+        ], id="div-view-dashboard"),
+
+        # Plan view (toggled)
+        html.Div(build_panel(None, [
                 # Tabs container
-                dbc.Tabs([
+                dbc.Tabs(active_tab="tab-portfolio", children=[
                     dbc.Tab([
                         # Portfolio tab content
                         dbc.Row([
@@ -107,165 +175,63 @@ def build_layout():
                     
                     dbc.Tab([
                         # Spending tab content
-                        dash_table.DataTable(
+                        build_data_table(
                             id="tbl-spending",
                             columns=[
                                 {"name": "Age From", "id": "age_from", "type": "numeric"},
                                 {"name": "Age To", "id": "age_to", "type": "numeric"},
-                                {"name": "Amount Monthly (₪)", "id": "amount_monthly", "type": "numeric"},
+                                {"name": "Amount Monthly (₪)", "id": "amount_monthly", "type": "numeric", "format": _MONEY_FORMAT},
                                 {"name": "Label", "id": "label", "type": "text"},
                                 {"name": "Category", "id": "category", "presentation": "dropdown"}
                             ],
-                            data=[],
-                            editable=True,
-                            row_deletable=True,
-                            style_header={
-                                "backgroundColor": "var(--md-surface-2)", "fontWeight": "500",
-                                "textTransform": "uppercase", "fontSize": "0.78rem",
-                                "color": "rgba(255,255,255,.87)", "border": "none",
-                            },
-                            style_cell={
-                                "fontFamily": "Roboto, sans-serif", "padding": "10px 12px",
-                                "backgroundColor": "var(--md-surface-1)", "color": "rgba(255,255,255,.87)",
-                                "border": "none",
-                            },
-                            style_data_conditional=[
-                                {
-                                    "filter_query": '{category} = "strict"',
-                                    "column_id": "category",
-                                    "backgroundColor": CATEGORY_COLORS["strict"] + " !important",
-                                    "color": "white"
-                                },
-                                {
-                                    "filter_query": '{category} = "lifestyle"',
-                                    "column_id": "category",
-                                    "backgroundColor": CATEGORY_COLORS["lifestyle"] + " !important",
-                                    "color": "white"
-                                },
-                                {
-                                    "filter_query": '{category} = "gifts"',
-                                    "column_id": "category",
-                                    "backgroundColor": CATEGORY_COLORS["gifts"] + " !important",
-                                    "color": "white"
-                                }
-                            ],
-                            dropdown={
-                                "category": {
-                                    "options": [
-                                        {"label": c, "value": c} for c in ("strict","lifestyle","gifts")
-                                    ]
-                                }
-                            }
+                            category_col="category"
                         ),
-                        dbc.Button("+ Add band", id="btn-add-spending", color="outline-primary", size="sm"),
+                        dbc.Button("Add band", id="btn-add-spending", color="outline-primary", size="sm"),
                     ], label="Spending", tab_id="tab-spending"),
                     
                     dbc.Tab([
                         # Income tab content
-                        dash_table.DataTable(
+                        build_data_table(
                             id="tbl-income",
                             columns=[
                                 {"name": "Age From", "id": "age_from", "type": "numeric"},
                                 {"name": "Age To", "id": "age_to", "type": "numeric"},
-                                {"name": "Amount Monthly (₪)", "id": "amount_monthly", "type": "numeric"},
+                                {"name": "Amount Monthly (₪)", "id": "amount_monthly", "type": "numeric", "format": _MONEY_FORMAT},
                                 {"name": "Label", "id": "label", "type": "text"}
                             ],
-                            data=[],
-                            editable=True,
-                            row_deletable=True,
-                            style_header={
-                                "backgroundColor": "var(--md-surface-2)", "fontWeight": "500",
-                                "textTransform": "uppercase", "fontSize": "0.78rem",
-                                "color": "rgba(255,255,255,.87)", "border": "none",
-                            },
-                            style_cell={
-                                "fontFamily": "Roboto, sans-serif", "padding": "10px 12px",
-                                "backgroundColor": "var(--md-surface-1)", "color": "rgba(255,255,255,.87)",
-                                "border": "none",
-                            },
+                            category_col=None
                         ),
-                        dbc.Button("+ Add band", id="btn-add-income", color="outline-primary", size="sm"),
+                        dbc.Button("Add band", id="btn-add-income", color="outline-primary", size="sm"),
                     ], label="Income", tab_id="tab-income"),
                     
                     dbc.Tab([
                         # Lumps tab content
-                        dash_table.DataTable(
+                        build_data_table(
                             id="tbl-lumps",
                             columns=[
                                 {"name": "Age", "id": "age", "type": "numeric"},
-                                {"name": "Amount (₪)", "id": "amount", "type": "numeric"},
+                                {"name": "Amount (₪)", "id": "amount", "type": "numeric", "format": _MONEY_FORMAT},
                                 {"name": "Label", "id": "label", "type": "text"},
                                 {"name": "Category", "id": "category", "presentation": "dropdown"}
                             ],
-                            data=[],
-                            editable=True,
-                            row_deletable=True,
-                            style_header={
-                                "backgroundColor": "var(--md-surface-2)", "fontWeight": "500",
-                                "textTransform": "uppercase", "fontSize": "0.78rem",
-                                "color": "rgba(255,255,255,.87)", "border": "none",
-                            },
-                            style_cell={
-                                "fontFamily": "Roboto, sans-serif", "padding": "10px 12px",
-                                "backgroundColor": "var(--md-surface-1)", "color": "rgba(255,255,255,.87)",
-                                "border": "none",
-                            },
-                            style_data_conditional=[
-                                {
-                                    "filter_query": '{category} = "strict"',
-                                    "column_id": "category",
-                                    "backgroundColor": CATEGORY_COLORS["strict"] + " !important",
-                                    "color": "white"
-                                },
-                                {
-                                    "filter_query": '{category} = "lifestyle"',
-                                    "column_id": "category",
-                                    "backgroundColor": CATEGORY_COLORS["lifestyle"] + " !important",
-                                    "color": "white"
-                                },
-                                {
-                                    "filter_query": '{category} = "gifts"',
-                                    "column_id": "category",
-                                    "backgroundColor": CATEGORY_COLORS["gifts"] + " !important",
-                                    "color": "white"
-                                }
-                            ],
-                            dropdown={
-                                "category": {
-                                    "options": [
-                                        {"label": c, "value": c} for c in ("strict","lifestyle","gifts")
-                                    ]
-                                }
-                            }
+                            category_col="category"
                         ),
-                        dbc.Button("+ Add event", id="btn-add-lumps", color="outline-primary", size="sm"),
+                        dbc.Button("Add event", id="btn-add-lumps", color="outline-primary", size="sm"),
                     ], label="Lumps", tab_id="tab-lumps"),
                     
                     dbc.Tab([
                         # Properties tab content
-                        dash_table.DataTable(
+                        build_data_table(
                             id="tbl-properties",
                             columns=[
                                 {"name": "Start Age", "id": "start_age", "type": "numeric"},
-                                {"name": "Initial Value (₪)", "id": "initial_value", "type": "numeric"},
-                                {"name": "Rent Monthly (₪)", "id": "rent_monthly", "type": "numeric"},
+                                {"name": "Initial Value (₪)", "id": "initial_value", "type": "numeric", "format": _MONEY_FORMAT},
+                                {"name": "Rent Monthly (₪)", "id": "rent_monthly", "type": "numeric", "format": _MONEY_FORMAT},
                                 {"name": "Label", "id": "label", "type": "text"}
                             ],
-                            data=[],
-                            editable=True,
-                            row_deletable=True,
-                            style_header={
-                                "backgroundColor": "var(--md-surface-2)", "fontWeight": "500",
-                                "textTransform": "uppercase", "fontSize": "0.78rem",
-                                "color": "rgba(255,255,255,.87)", "border": "none",
-                            },
-                            style_cell={
-                                "fontFamily": "Roboto, sans-serif", "padding": "10px 12px",
-                                "backgroundColor": "var(--md-surface-1)", "color": "rgba(255,255,255,.87)",
-                                "border": "none",
-                            },
+                            category_col=None
                         ),
-                        dbc.Button("+ Add property", id="btn-add-properties", color="outline-primary", size="sm"),
+                        dbc.Button("Add property", id="btn-add-properties", color="outline-primary", size="sm"),
                         html.Div("Growth µ/σ follow the scenario's selected market (see Portfolio tab).", 
                                 className="small text-muted mt-1"),
                     ], label="Properties", tab_id="tab-properties"),
@@ -274,9 +240,9 @@ def build_layout():
                 # Playground section
                 dbc.Switch(id="switch-playground", label="Playground mode", value=False),
                 html.Div(id="banner-playground", 
-                        children="PLAYGROUND — click the chart to add an event", 
+                        children="Playground — click the chart to add an event", 
                         style={"display": "none"}),
-                dcc.Graph(id="graph-preview", figure=_EMPTY_DARK_FIGURE),
+                dcc.Graph(id="graph-preview", figure=_EMPTY_FIGURE),
                 html.Div(id="div-playground-chips"),
                 
                 # Playground modal
@@ -293,9 +259,9 @@ def build_layout():
                 dbc.Button("Clear all", id="btn-pg-clear", color="outline-secondary", size="sm"),
                 
                 # Guardrails panel
-                dbc.Button("▸ Guardrails", id="btn-guardrails-header", color="outline-secondary", className="mb-2"),
+                dbc.Button("Guardrails", id="btn-guardrails-header", color="outline-secondary", className="mb-2"),
                 dbc.Collapse([
-                    dbc.Checkbox(id="chk-g1-enable", label="Enable G1"),
+                    dbc.Checkbox(id="chk-g1-enable", label="Enable spending guardrail"),
                     html.Div("Drop threshold:", className="mt-2"),
                     dcc.Slider(id="slider-g1-drop", min=0.05, max=0.50, step=0.01, value=0.20),
                     html.Div("Rise threshold:", className="mt-2"),
@@ -306,22 +272,10 @@ def build_layout():
                     dcc.Slider(id="slider-g1-raise", min=0.00, max=0.50, step=0.01, value=0.10),
                 ], id="collapse-guardrails", is_open=False),
 
-            ]), className="md-panel"), width=5),
+        ]), id="div-view-plan", style={"display": "none"}),
 
-            # Right column - Results
-            dbc.Col(dbc.Card(dbc.CardBody([
-                dbc.Button("Run Simulation ▶", id="btn-run", color="primary"),
-                dbc.Button("Run with playground events ▶", id="btn-run-playground", color="primary"),
-                dbc.Switch(id="switch-historic", label="Include historic scenarios", value=False),
-                html.Div(id="div-result-badges"),
-                html.Div(id="div-summary"),
-                dcc.Loading(children=[
-                    dcc.Graph(id="graph-results", figure=_EMPTY_DARK_FIGURE)
-                ]),
-            ]), className="md-panel"), width=7),
-        ]),
-        
         # Hidden stores
+        dcc.Store(id="store-active-view", storage_type="memory", data="dashboard"),
         dcc.Store(id="store-scenario", storage_type="session", data=DEFAULT_SCENARIO),
         dcc.Store(id="store-playground", storage_type="memory", data=[]),
         dcc.Store(id="store-guardrails", storage_type="session", data={"guardrails": [{"type": "volatility_discretionary_scaling", "enabled": False, "drop_threshold": 0.20, "rise_threshold": 0.20, "cut_pct": 0.15, "raise_pct": 0.10}]}),
