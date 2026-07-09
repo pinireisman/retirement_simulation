@@ -4,6 +4,15 @@ Callbacks #1 (hydrate_tabs), #2 (collect_edits) and #10 (render_preview) are
 registered directly in this module. Callbacks #3-#9 (market info, fat-tail
 slider, upload/save/load/refresh) are appended inside `register_callbacks`
 below the marker comment.
+
+IMPORTANT — hydrate_tabs / collect_edits round-trip:
+    hydrate_tabs writes store → widgets.  collect_edits reads widgets → store.
+    The market dropdown (dd-market) must NOT auto-overwrite the mu/sigma inputs
+    because that would create a circular update: dd-market changes → inp-mu/
+    inp-sigma change → collect_edits fires → store-scenario changes →
+    hydrate_tabs fires → dd-market re-renders (no-op) but the snapshot guard
+    would be bypassed if mu/sigma were auto-set by dd-market.  Instead, the
+    user explicitly clicks "Use market default" to apply a market's mu/sigma.
 """
 from __future__ import annotations
 
@@ -23,6 +32,7 @@ from dash import ALL, Input, Output, State, ctx, html, no_update
 from engine.figures import (
     PLAYGROUND_COLOR, build_cash_flow_series, net_cash_flow,
     fig_cash_flow, fig_portfolio, fig_draw, fig_historic, get_ruin_explanation,
+    fig_return_distribution,
 )
 from engine.guardrails import parse_guardrail_configs
 from engine.historic_returns import historical_stress_real_factors_70_30
@@ -31,7 +41,10 @@ from engine.simulation import run_historic_scenario, run_simulation
 from engine.theme import PLOTLY_TEMPLATE, SERIES_NET_CASH_FLOW, tone_for_ruin
 from webapp.components import build_stat_tile, build_badge_row, build_chart_card
 
-_GUARDRAIL_DISPLAY_NAMES = {"volatility_discretionary_scaling": "Spending guardrail"}
+_GUARDRAIL_DISPLAY_NAMES = {
+    "volatility_discretionary_scaling": "Spending guardrail",
+    "funded_ratio_guardrail": "Funded ratio guardrail",
+}
 _TONE_COLOR = {"success": "var(--success)", "borderline": "var(--warning)", "danger": "var(--danger)"}
 
 # PRD §5.1: cache raw run results by run_id, evicting the oldest once more
@@ -68,6 +81,11 @@ def _num(value, cast=float, default=0):
     if value in (None, ""):
         return default
     return cast(value)
+
+
+def _with_annual(bands):
+    """Display-only annual column; collect_edits drops it on save."""
+    return [{**b, "amount_annual": _num(b.get("amount_monthly"), float, 0) * 12} for b in bands]
 
 
 def _preview_figure(scenario: dict, playground_events: list | None):
@@ -182,7 +200,7 @@ def execute_run(scenario: dict, guardrail_cfg: dict, playground_events: list[dic
             r = run_historic_scenario(params, seq["real_factors"], seq.get("property_factors"))
             r["name"] = _format_historic_name(key)
             r["start_year"] = int(seq["years"][0])
-            r["end_year"] = int(seq["years"][-1])
+            r["end_age"] = int(seq["years"][-1])
             historic_figs.append((r["name"], fig_historic(results, r)))
 
     figures = {
@@ -211,6 +229,8 @@ def register_callbacks(app) -> None:
         Output("radio-mode", "value"),
         Output("inp-n-paths", "value"),
         Output("inp-seed", "value"),
+        Output("inp-mu", "value"),
+        Output("inp-sigma", "value"),
         Output("tbl-spending", "data"),
         Output("tbl-income", "data"),
         Output("tbl-lumps", "data"),
@@ -225,31 +245,51 @@ def register_callbacks(app) -> None:
         callback itself rendered, and no-ops when they match."""
         snapshot = json.dumps(scenario, sort_keys=True)
         if snapshot == _last_hydrated_json["value"]:
-            return (no_update,) * 14
+            return (no_update,) * 16
         _last_hydrated_json["value"] = snapshot
 
         portfolio = scenario["portfolio"]
         name = scenario.get("name", "untitled")
         header = f"{name} •" if _dirty["value"] else name
+
+        # Resolve mu/sigma: use explicit values from store, or fall back to
+        # the selected market's defaults (same logic as SimulationParams.from_scenario).
+        from engine.markets import MARKETS
+        market = portfolio.get("market", "IL")
+        mu_val = portfolio.get("mu")
+        sigma_val = portfolio.get("sigma")
+        if mu_val is None:
+            mu_val = MARKETS[market]["mu"]
+        if sigma_val is None:
+            sigma_val = MARKETS[market]["sigma"]
+
         return (
             portfolio["initial_portfolio"],
             portfolio["start_age"],
             portfolio["end_age"],
-            portfolio["market"],
+            market,
             portfolio["fat_tails_enabled"],
             portfolio["fat_tails_df"],
             portfolio["mode"],
             portfolio["n_paths"],
             portfolio["random_seed"],
-            scenario.get("spending_bands", []),
-            scenario.get("income_bands", []),
+            mu_val,
+            sigma_val,
+            _with_annual(scenario.get("spending_bands", [])),
+            _with_annual(scenario.get("income_bands", [])),
             scenario.get("lumps", []),
             scenario.get("properties", []),
             header,
         )
 
+    TABLE_TRIGGER_IDS = {
+        "tbl-spending", "tbl-income", "tbl-lumps", "tbl-properties",
+        "btn-add-spending", "btn-add-income", "btn-add-lumps", "btn-add-properties",
+    }
+
     @app.callback(
         Output("store-scenario", "data", allow_duplicate=True),
+        Output("store-undo-stack", "data", allow_duplicate=True),
         Input("inp-initial-portfolio", "value"),
         Input("inp-start-age", "value"),
         Input("inp-end-age", "value"),
@@ -259,6 +299,8 @@ def register_callbacks(app) -> None:
         Input("radio-mode", "value"),
         Input("inp-n-paths", "value"),
         Input("inp-seed", "value"),
+        Input("inp-mu", "value"),
+        Input("inp-sigma", "value"),
         Input("tbl-spending", "data"),
         Input("tbl-income", "data"),
         Input("tbl-lumps", "data"),
@@ -267,12 +309,15 @@ def register_callbacks(app) -> None:
         Input("btn-add-income", "n_clicks"),
         Input("btn-add-lumps", "n_clicks"),
         Input("btn-add-properties", "n_clicks"),
+        Input("slider-g2-discount", "value"),
         State("store-scenario", "data"),
+        State("store-undo-stack", "data"),
         prevent_initial_call=True,
     )
     def collect_edits(initial_portfolio, start_age, end_age, market, fat_tails, df,
-                       mode, n_paths, seed, spending_rows, income_rows, lumps_rows,
-                       properties_rows, _n_sp, _n_inc, _n_lp, _n_pr, prev_scenario):
+                       mode, n_paths, seed, mu, sigma, spending_rows, income_rows, lumps_rows,
+                       properties_rows, _n_sp, _n_inc, _n_lp, _n_pr, discount, prev_scenario,
+                       undo_stack):
         """Widgets -> store. On an add-row button click, appends a default
         row to that band's table before serializing everything back out."""
         triggered = ctx.triggered_id
@@ -296,6 +341,12 @@ def register_callbacks(app) -> None:
             properties_rows.append({"start_age": start_age_i, "initial_value": 0,
                                      "rent_monthly": 0, "label": ""})
 
+        # Persist mu/sigma: store the explicit values from inputs.
+        # If the user typed a value, it's stored; if they used market default
+        # via the button, that explicit value is also stored.
+        mu_val = _num(mu, float) if mu not in (None, "") else None
+        sigma_val = _num(sigma, float) if sigma not in (None, "") else None
+
         scenario = {
             "$schema": prev_scenario.get("$schema", "scenario.v1"),
             "name": prev_scenario.get("name", "untitled"),
@@ -309,6 +360,10 @@ def register_callbacks(app) -> None:
                 "mode": mode,
                 "n_paths": _num(n_paths, int, 10_000),
                 "random_seed": _num(seed, int, None) if seed not in (None, "") else None,
+                "mu": mu_val,
+                "sigma": sigma_val,
+                # slider is in percent; engine wants a fraction (default 1% -> 0.01)
+                "real_discount_rate": _num(discount, float, 1) / 100,
             },
             "spending_bands": [
                 {
@@ -353,7 +408,34 @@ def register_callbacks(app) -> None:
             ],
         }
         _dirty["value"] = True
-        return scenario
+
+        triggered_ids = {t["prop_id"].split(".")[0] for t in ctx.triggered}
+        new_undo_stack = list(undo_stack or [])
+        if (triggered_ids & TABLE_TRIGGER_IDS) and scenario != prev_scenario:
+            new_undo_stack = (new_undo_stack + [prev_scenario])[-20:]
+
+        return scenario, new_undo_stack
+
+    @app.callback(
+        Output("store-scenario", "data", allow_duplicate=True),
+        Output("store-undo-stack", "data", allow_duplicate=True),
+        Input("btn-undo", "n_clicks"),
+        State("store-undo-stack", "data"),
+        prevent_initial_call=True,
+    )
+    def undo_last_edit(n_clicks, undo_stack):
+        undo_stack = list(undo_stack or [])
+        if not undo_stack:
+            return no_update, no_update
+        prev = undo_stack.pop()
+        return prev, undo_stack
+
+    @app.callback(
+        Output("btn-undo", "disabled"),
+        Input("store-undo-stack", "data"),
+    )
+    def toggle_undo_disabled(undo_stack):
+        return not bool(undo_stack)
 
     @app.callback(
         Output("graph-preview", "figure"),
@@ -433,24 +515,30 @@ def register_callbacks(app) -> None:
 
     @app.callback(
         Output("store-guardrails", "data"),
-        Input("chk-g1-enable", "value"),
+        Input("dd-guardrail-strategy", "value"),
         Input("slider-g1-drop", "value"),
         Input("slider-g1-rise", "value"),
         Input("slider-g1-cut", "value"),
         Input("slider-g1-raise", "value"),
+        Input("slider-g2-lower", "value"),
+        Input("slider-g2-target", "value"),
+        Input("slider-g2-upper", "value"),
     )
-    def collect_guardrails(enabled, drop, rise, cut, raise_pct):
-        """Callback #15. PRD §4.3 schema."""
-        return {
-            "guardrails": [{
-                "type": "volatility_discretionary_scaling",
-                "enabled": bool(enabled),
-                "drop_threshold": drop,
-                "rise_threshold": rise,
-                "cut_pct": cut,
-                "raise_pct": raise_pct,
-            }]
-        }
+    def collect_guardrails(strategy, drop, rise, cut, raise_pct, fr_lower, fr_target, fr_upper):
+        """Callback #15. PRD §4.3 schema, strategy-aware: exactly one guardrail
+        entry is enabled — the one the dropdown selects. Sliders are in percent;
+        store keeps fractions. The discount-rate slider is a SimulationParams
+        field, not a guardrail option, so it feeds store-scenario (collect_edits),
+        not this store."""
+        return {"guardrails": [
+            {"type": "volatility_discretionary_scaling",
+             "enabled": strategy == "volatility_discretionary_scaling",
+             "drop_threshold": drop / 100, "rise_threshold": rise / 100,
+             "cut_pct": cut / 100, "raise_pct": raise_pct / 100},
+            {"type": "funded_ratio_guardrail",
+             "enabled": strategy == "funded_ratio_guardrail",
+             "fr_lower": fr_lower / 100, "fr_target": fr_target / 100, "fr_upper": fr_upper / 100},
+        ]}
 
     @app.callback(
         Output("collapse-guardrails", "is_open"),
@@ -461,6 +549,17 @@ def register_callbacks(app) -> None:
     def toggle_guardrail_panel(n_clicks, is_open):
         """Callback #16."""
         return not is_open
+
+    @app.callback(
+        Output("block-g1", "style"),
+        Output("block-g2", "style"),
+        Input("dd-guardrail-strategy", "value"),
+    )
+    def toggle_guardrail_blocks(strategy):
+        """Show only the selected strategy's slider block; hide the other."""
+        show, hide = {"display": "block"}, {"display": "none"}
+        return (show if strategy == "volatility_discretionary_scaling" else hide,
+                show if strategy == "funded_ratio_guardrail" else hide)
 
     @app.callback(
         Output("store-active-view", "data"),
@@ -499,8 +598,46 @@ def register_callbacks(app) -> None:
         return not fat_tails_enabled
 
     @app.callback(
+        Output("inp-mu", "value", allow_duplicate=True),
+        Output("inp-sigma", "value", allow_duplicate=True),
+        Input("btn-apply-market-preset", "n_clicks"),
+        State("dd-market", "value"),
+        prevent_initial_call=True,
+    )
+    def apply_market_preset(n_clicks, market):
+        """Explicitly set mu/sigma from the selected market.
+        
+        This is a user-initiated action (button click), NOT an automatic
+        overwrite from dd-market changes — see module docstring for the
+        race-condition reasoning."""
+        if market is None:
+            return no_update, no_update
+        from engine.markets import MARKETS
+        m = MARKETS[market]
+        return m["mu"], m["sigma"]
+
+    @app.callback(
+        Output("graph-return-distribution", "figure"),
+        Input("inp-mu", "value"),
+        Input("inp-sigma", "value"),
+        Input("chk-fat-tails", "value"),
+        Input("slider-df", "value"),
+    )
+    def update_return_distribution(mu, sigma, fat_tails_enabled, df):
+        """Live histogram preview of the assumed return distribution.
+        
+        Updates whenever any of its four inputs change, so the user sees
+        the effect of editing mu/sigma or toggling fat tails in real time."""
+        if mu is None:
+            mu = 0.05
+        if sigma is None:
+            sigma = 0.15
+        return fig_return_distribution(
+            float(mu), float(sigma), bool(fat_tails_enabled), int(df) if df else 5
+        )
+
+    @app.callback(
         Output("store-scenario", "data", allow_duplicate=True),
-        Output("store-playground", "data", allow_duplicate=True),
         Output("toast", "children"),
         Output("toast", "is_open"),
         Output("toast", "icon"),
@@ -509,10 +646,10 @@ def register_callbacks(app) -> None:
         prevent_initial_call=True,
     )
     def upload_xlsx(contents, filename):
-        """Upload a scenario from an xlsx file."""
+        """Upload a scenario from an xlsx file. Playground events persist across loads."""
         try:
             if contents is None or filename is None:
-                return no_update, no_update, "No file selected", True, "danger"
+                return no_update, "No file selected", True, "danger"
 
             # Decode base64 content
             content_type, content_string = contents.split(',')
@@ -537,13 +674,13 @@ def register_callbacks(app) -> None:
                 # Clean up temp file
                 os.unlink(tmp_path)
 
-                return scenario, [], "Scenario loaded successfully", True, "success"
+                return scenario, "Scenario loaded successfully", True, "success"
             except Exception as exc:
                 # Clean up temp file on error
                 os.unlink(tmp_path)
-                return no_update, no_update, f"Error loading scenario: {str(exc)}", True, "danger"
+                return no_update, f"Error loading scenario: {str(exc)}", True, "danger"
         except Exception as exc:
-            return no_update, no_update, f"Error decoding file: {str(exc)}", True, "danger"
+            return no_update, f"Error decoding file: {str(exc)}", True, "danger"
 
     @app.callback(
         Output("toast", "children", allow_duplicate=True),
@@ -612,7 +749,6 @@ def register_callbacks(app) -> None:
 
     @app.callback(
         Output("store-scenario", "data", allow_duplicate=True),
-        Output("store-playground", "data", allow_duplicate=True),
         Output("toast", "children", allow_duplicate=True),
         Output("toast", "is_open", allow_duplicate=True),
         Output("toast", "icon", allow_duplicate=True),
@@ -621,10 +757,10 @@ def register_callbacks(app) -> None:
         prevent_initial_call=True,
     )
     def load_scenario(n_clicks, value):
-        """Load a scenario from an xlsx file."""
+        """Load a scenario from an xlsx file. Playground events persist across loads."""
         try:
             if not value:
-                return no_update, no_update, "Please select a scenario to load", True, "info"
+                return no_update, "Please select a scenario to load", True, "info"
             
             # Load the scenario from xlsx
             from engine.params import scenario_from_xlsx
@@ -637,9 +773,9 @@ def register_callbacks(app) -> None:
             # Mark as clean
             mark_clean()
             
-            return scenario, [], "Scenario loaded successfully", True, "success"
+            return scenario, "Scenario loaded successfully", True, "success"
         except Exception as exc:
-            return no_update, no_update, f"Error loading scenario: {str(exc)}", True, "danger"
+            return no_update, f"Error loading scenario: {str(exc)}", True, "danger"
 
     @app.callback(
         Output("dd-load-scenario", "options"),
@@ -708,11 +844,22 @@ def register_callbacks(app) -> None:
 
     # Figures are always rendered server-side in the light palette; repaint them
     # for the active theme client-side whenever Dash pushes new figure data
-    # (window.paintCharts lives in assets/theme.js).
+    # (window.paintCharts lives in assets/theme.js). The same push also syncs
+    # each chart container to its figure's layout.height: plotly draws the SVG
+    # at that height regardless of container size (absolutely positioned), so a
+    # taller figure (e.g. cash flow's legend-sized panel) would otherwise bleed
+    # over the row below it.
     app.clientside_callback(
         """
         function() {
             if (window.paintCharts) { window.paintCharts(); }
+            requestAnimationFrame(function () {
+                document.querySelectorAll(".chart-card .js-plotly-plot").forEach(function (gd) {
+                    var h = gd.layout && gd.layout.height;
+                    var wrap = gd.closest(".dash-graph");
+                    if (h && wrap) { wrap.style.minHeight = h + "px"; }
+                });
+            });
             return "";
         }
         """,

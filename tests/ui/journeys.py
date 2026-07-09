@@ -257,8 +257,8 @@ def enable_historic(page: Page) -> None:
 
 
 def enable_playground(page: Page) -> None:
-    # The playground switch lives in the Plan view, below the tabs.
-    goto_view(page, "plan")
+    # The playground section lives in the Dashboard (simulation) view.
+    goto_view(page, "dashboard")
     # COUPLING: dbc.Switch renders a visually-hidden checkbox + a clickable
     # <label for=...>; click the label (the input itself is opacity:0).
     page.locator("label[for='switch-playground']").click()

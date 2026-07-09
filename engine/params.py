@@ -25,6 +25,7 @@ class Lump:
     amount: float            # annual-mode amount; positive inflow, negative outflow
     label: str = ""
     category: str = "strict"
+    playground: bool = False  # what-if event, drawn in PLAYGROUND_COLOR
 
 
 @dataclass
@@ -57,6 +58,7 @@ class SimulationParams:
     annual: bool = True
     n_paths: int = 10_000
     random_seed: Optional[int] = 42
+    real_discount_rate: float = 0.01   # used only by funded-ratio guardrails' PV lookahead
     spending_bands: List[Band] = field(default_factory=list)
     income_bands: List[Band] = field(default_factory=list)
     lumps: List[Lump] = field(default_factory=list)
@@ -93,23 +95,30 @@ class SimulationParams:
             for l in scenario.get("lumps", [])
         ]
         for ev in playground_events or []:
-            lumps.append(Lump(ev["age"], ev["amount"], ev.get("label", "Playground"), "strict"))
+            lumps.append(Lump(ev["age"], ev["amount"], ev.get("label", "Playground"),
+                              "strict", playground=True))
         properties = [
             Property(p["start_age"], p["initial_value"], p["rent_monthly"] * 12,
                      market["housing_mu"], market["housing_sigma"], p.get("label", ""))
             for p in scenario.get("properties", [])
         ]
 
+        mu = portfolio.get("mu")
+        sigma = portfolio.get("sigma")
+        real_return_mean = mu if mu is not None else market["mu"]
+        real_return_sd = sigma if sigma is not None else market["sigma"]
+
         return cls(
             start_age=portfolio["start_age"],
             end_age=portfolio["end_age"],
             initial_portfolio=portfolio["initial_portfolio"],
-            real_return_mean=market["mu"],
-            real_return_sd=market["sigma"],
+            real_return_mean=real_return_mean,
+            real_return_sd=real_return_sd,
             fat_tails_df=portfolio["fat_tails_df"] if portfolio.get("fat_tails_enabled") else None,
             annual=portfolio.get("mode", "annual") == "annual",
             n_paths=portfolio.get("n_paths", 10_000),
             random_seed=portfolio.get("random_seed", 42),
+            real_discount_rate=portfolio.get("real_discount_rate", 0.01),
             spending_bands=spending_bands,
             income_bands=income_bands,
             lumps=lumps,
@@ -319,6 +328,9 @@ def scenario_to_xlsx(scenario: dict, path) -> None:
             "mode": portfolio["mode"] if i == 0 else None,
             "fat_tails_enabled": portfolio["fat_tails_enabled"] if i == 0 else None,
             "fat_tails_df": portfolio["fat_tails_df"] if i == 0 else None,
+            "mu": portfolio.get("mu") if i == 0 else None,
+            "sigma": portfolio.get("sigma") if i == 0 else None,
+            "real_discount_rate": portfolio.get("real_discount_rate") if i == 0 else None,
             "n_paths": portfolio["n_paths"] if i == 0 else None,
             "random_seed": portfolio["random_seed"] if i == 0 else None,
             "spending_age_from": spending_data[i]["spending_age_from"] if i < len(spending_data) else None,
@@ -365,7 +377,10 @@ def _scenario_from_df(df) -> dict:
         "fat_tails_df": int(df.iloc[0]["fat_tails_df"]) if "fat_tails_df" in df.columns and pd.notna(df.iloc[0]["fat_tails_df"]) else 5,
         "mode": df.iloc[0]["mode"] if "mode" in df.columns and pd.notna(df.iloc[0]["mode"]) else "annual",
         "n_paths": int(df.iloc[0]["n_paths"]) if "n_paths" in df.columns and pd.notna(df.iloc[0]["n_paths"]) else 10000,
-        "random_seed": int(df.iloc[0]["random_seed"]) if "random_seed" in df.columns and pd.notna(df.iloc[0]["random_seed"]) else 42
+        "random_seed": int(df.iloc[0]["random_seed"]) if "random_seed" in df.columns and pd.notna(df.iloc[0]["random_seed"]) else 42,
+        "mu": float(df.iloc[0]["mu"]) if "mu" in df.columns and pd.notna(df.iloc[0]["mu"]) else None,
+        "sigma": float(df.iloc[0]["sigma"]) if "sigma" in df.columns and pd.notna(df.iloc[0]["sigma"]) else None,
+        "real_discount_rate": float(df.iloc[0]["real_discount_rate"]) if "real_discount_rate" in df.columns and pd.notna(df.iloc[0]["real_discount_rate"]) else 0.01,
     }
     
     # Build the scenario structure

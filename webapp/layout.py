@@ -1,9 +1,11 @@
+import json
+
 from dash import dcc, html
 from dash.dash_table.Format import Format, Scheme
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 from engine.markets import MARKETS
-from engine.theme import PLOTLY_TEMPLATE
+from engine.theme import PLOTLY_TEMPLATE, chart_dark_color_map
 from webapp.components import build_panel, build_data_table, build_chart_card, build_stat_tile
 
 _EMPTY_FIGURE = go.Figure(layout={"template": PLOTLY_TEMPLATE})
@@ -22,6 +24,8 @@ DEFAULT_SCENARIO = {
         "mode": "annual",
         "n_paths": 10000,
         "random_seed": 42,
+        "mu": MARKETS["IL"]["mu"],
+        "sigma": MARKETS["IL"]["sigma"],
     },
     "spending_bands": [],
     "income_bands": [],
@@ -31,6 +35,10 @@ DEFAULT_SCENARIO = {
 
 def build_layout():
     return dbc.Container([
+        # light->dark trace-color map for assets/theme.js (generated in
+        # engine/theme.py so the _shade() variants can never drift out of sync)
+        html.Div(id="chart-color-map", className="d-none",
+                 **{"data-map": json.dumps(chart_dark_color_map())}),
         # App bar
         dbc.Row([
             dbc.Col([
@@ -86,6 +94,33 @@ def build_layout():
                 ]),
             ], id="div-hero", className="wash-neutral p-4 mb-3"),
 
+            # Playground — what-if events layered on the plan, not part of it
+            html.Div([
+                dbc.Switch(id="switch-playground", label="Playground mode", value=False),
+                html.Div(id="banner-playground",
+                        children="Playground — click the chart to add an event",
+                        style={"display": "none"}),
+                html.Div([
+                    html.Div(
+                        dbc.Button("⤢", className="btn-maximize p-0", color="link", size="sm",
+                                   title="Maximize / restore"),
+                        className="d-flex justify-content-end",
+                    ),
+                    dcc.Graph(id="graph-preview", figure=_EMPTY_FIGURE, config={"responsive": True}),
+                ], className="chart-card"),
+                html.Div(id="div-playground-chips"),
+                dbc.Button("Clear all", id="btn-pg-clear", color="outline-secondary", size="sm"),
+                dbc.Modal([
+                    dbc.ModalHeader("Add Playground Event"),
+                    dbc.ModalBody([
+                        dbc.Input(id="input-pg-age", type="number", placeholder="Age"),
+                        dbc.Input(id="input-pg-amount", type="number", placeholder="Amount (₪)"),
+                        dbc.Input(id="input-pg-label", type="text", placeholder="Label"),
+                        dbc.Button("Confirm", id="btn-pg-confirm", color="primary", className="mt-2"),
+                    ]),
+                ], id="modal-playground", is_open=False),
+            ], className="mb-3"),
+
             html.Div(id="div-result-badges", className="mb-2"),
             html.Div(
                 id="div-summary",
@@ -118,6 +153,10 @@ def build_layout():
 
         # Plan view (toggled)
         html.Div(build_panel(None, [
+                # Undo button
+                dbc.Button("Undo", id="btn-undo", color="outline-secondary", size="sm",
+                           className="mb-2", disabled=True),
+
                 # Tabs container
                 dbc.Tabs(active_tab="tab-portfolio", children=[
                     dbc.Tab([
@@ -141,14 +180,28 @@ def build_layout():
                                 html.Label("Market"),
                                 dcc.Dropdown(id="dd-market", options=list(MARKETS.keys()), value="IL"),
                                 html.Span(id="lbl-market-mu-sigma", className="small"),
-                            ], width=12),
+                            ], width=6),
+                            dbc.Col([
+                                html.Label("Expected return µ (decimal, e.g. 0.042 = 4.2%)"),
+                                dbc.Input(id="inp-mu", type="number", step=0.001, value=MARKETS["IL"]["mu"]),
+                                html.Label("Volatility σ (decimal, e.g. 0.13 = 13%)", className="mt-2"),
+                                dbc.Input(id="inp-sigma", type="number", step=0.001, value=MARKETS["IL"]["sigma"]),
+                                dbc.Button("Use market default", id="btn-apply-market-preset", color="outline-secondary",
+                                           size="sm", className="mt-2"),
+                            ], width=6),
                         ]),
                         dbc.Row([
                             dbc.Col([
                                 dbc.Checkbox(id="chk-fat-tails", label="Fat tails (Student-t)", value=True),
                                 dcc.Slider(id="slider-df", min=3, max=10, step=1, value=5),
-                            ], width=6),
+                            ], width=3),
                         ]),
+                        dbc.Row([
+                            dbc.Col([
+                                html.Label("Return distribution preview", className="small text-muted"),
+                                dcc.Graph(id="graph-return-distribution", config={"displayModeBar": False}),
+                            ], width=6),
+                        ], className="mb-2"),
                         dbc.Row([
                             dbc.Col([
                                 html.Label("Mode"),
@@ -186,6 +239,7 @@ def build_layout():
                                 {"name": "Age From", "id": "age_from", "type": "numeric"},
                                 {"name": "Age To", "id": "age_to", "type": "numeric"},
                                 {"name": "Amount Monthly (₪)", "id": "amount_monthly", "type": "numeric", "format": _MONEY_FORMAT},
+                                {"name": "Amount Annual (₪)", "id": "amount_annual", "type": "numeric", "format": _MONEY_FORMAT, "editable": False},
                                 {"name": "Label", "id": "label", "type": "text"},
                                 {"name": "Category", "id": "category", "presentation": "dropdown"}
                             ],
@@ -202,6 +256,7 @@ def build_layout():
                                 {"name": "Age From", "id": "age_from", "type": "numeric"},
                                 {"name": "Age To", "id": "age_to", "type": "numeric"},
                                 {"name": "Amount Monthly (₪)", "id": "amount_monthly", "type": "numeric", "format": _MONEY_FORMAT},
+                                {"name": "Amount Annual (₪)", "id": "amount_annual", "type": "numeric", "format": _MONEY_FORMAT, "editable": False},
                                 {"name": "Label", "id": "label", "type": "text"}
                             ],
                             category_col=None
@@ -242,39 +297,44 @@ def build_layout():
                     ], label="Properties", tab_id="tab-properties"),
                 ]),
                 
-                # Playground section
-                dbc.Switch(id="switch-playground", label="Playground mode", value=False),
-                html.Div(id="banner-playground", 
-                        children="Playground — click the chart to add an event", 
-                        style={"display": "none"}),
-                dcc.Graph(id="graph-preview", figure=_EMPTY_FIGURE),
-                html.Div(id="div-playground-chips"),
-                
-                # Playground modal
-                dbc.Modal([
-                    dbc.ModalHeader("Add Playground Event"),
-                    dbc.ModalBody([
-                        dbc.Input(id="input-pg-age", type="number", placeholder="Age"),
-                        dbc.Input(id="input-pg-amount", type="number", placeholder="Amount (₪)"),
-                        dbc.Input(id="input-pg-label", type="text", placeholder="Label"),
-                        dbc.Button("Confirm", id="btn-pg-confirm", color="primary", className="mt-2"),
-                    ]),
-                ], id="modal-playground", is_open=False),
-                
-                dbc.Button("Clear all", id="btn-pg-clear", color="outline-secondary", size="sm"),
-                
                 # Guardrails panel
                 dbc.Button("Guardrails", id="btn-guardrails-header", color="outline-secondary", className="mb-2"),
                 dbc.Collapse([
-                    dbc.Checkbox(id="chk-g1-enable", label="Enable spending guardrail"),
-                    html.Div("Drop threshold:", className="mt-2"),
-                    dcc.Slider(id="slider-g1-drop", min=0.05, max=0.50, step=0.01, value=0.20),
-                    html.Div("Rise threshold:", className="mt-2"),
-                    dcc.Slider(id="slider-g1-rise", min=0.05, max=0.50, step=0.01, value=0.20),
-                    html.Div("Cut percentage:", className="mt-2"),
-                    dcc.Slider(id="slider-g1-cut", min=0.00, max=0.50, step=0.01, value=0.15),
-                    html.Div("Raise percentage:", className="mt-2"),
-                    dcc.Slider(id="slider-g1-raise", min=0.00, max=0.50, step=0.01, value=0.10),
+                    html.Div("Strategy:", className="mt-2"),
+                    dcc.Dropdown(id="dd-guardrail-strategy",
+                                 options=[{"label": "None", "value": "none"},
+                                          {"label": "Volatility-based (G1)", "value": "volatility_discretionary_scaling"},
+                                          {"label": "Funded ratio (G2)", "value": "funded_ratio_guardrail"}],
+                                 value="none", clearable=False),
+                    # Percent units in the UI; collect_guardrails converts to fractions.
+                    html.Div([
+                        html.Div("Drop threshold (%):", className="mt-2"),
+                        dcc.Slider(id="slider-g1-drop", min=5, max=50, step=1, value=20,
+                                   tooltip={"placement": "bottom", "template": "{value}%"}),
+                        html.Div("Rise threshold (%):", className="mt-2"),
+                        dcc.Slider(id="slider-g1-rise", min=5, max=50, step=1, value=20,
+                                   tooltip={"placement": "bottom", "template": "{value}%"}),
+                        html.Div("Cut percentage (%):", className="mt-2"),
+                        dcc.Slider(id="slider-g1-cut", min=0, max=50, step=1, value=15,
+                                   tooltip={"placement": "bottom", "template": "{value}%"}),
+                        html.Div("Raise percentage (%):", className="mt-2"),
+                        dcc.Slider(id="slider-g1-raise", min=0, max=50, step=1, value=10,
+                                   tooltip={"placement": "bottom", "template": "{value}%"}),
+                    ], id="block-g1", style={"display": "none"}),
+                    html.Div([
+                        html.Div("Lower guardrail — funded ratio (%):", className="mt-2"),
+                        dcc.Slider(id="slider-g2-lower", min=50, max=100, step=1, value=85,
+                                   tooltip={"placement": "bottom", "template": "{value}%"}),
+                        html.Div("Target funded ratio (%):", className="mt-2"),
+                        dcc.Slider(id="slider-g2-target", min=90, max=150, step=1, value=105,
+                                   tooltip={"placement": "bottom", "template": "{value}%"}),
+                        html.Div("Upper guardrail — funded ratio (%):", className="mt-2"),
+                        dcc.Slider(id="slider-g2-upper", min=100, max=200, step=1, value=130,
+                                   tooltip={"placement": "bottom", "template": "{value}%"}),
+                        html.Div("Real discount rate (%):", className="mt-2"),
+                        dcc.Slider(id="slider-g2-discount", min=0, max=4, step=0.25, value=1,
+                                   tooltip={"placement": "bottom", "template": "{value}%"}),
+                    ], id="block-g2", style={"display": "none"}),
                 ], id="collapse-guardrails", is_open=False),
 
         ]), id="div-view-plan", style={"display": "none"}),
@@ -286,9 +346,14 @@ def build_layout():
         # Hidden stores
         dcc.Store(id="store-active-view", storage_type="memory", data="dashboard"),
         dcc.Store(id="store-scenario", storage_type="session", data=DEFAULT_SCENARIO),
-        dcc.Store(id="store-playground", storage_type="memory", data=[]),
-        dcc.Store(id="store-guardrails", storage_type="session", data={"guardrails": [{"type": "volatility_discretionary_scaling", "enabled": False, "drop_threshold": 0.20, "rise_threshold": 0.20, "cut_pct": 0.15, "raise_pct": 0.10}]}),
+        # localStorage: playground events survive server restarts and plan loads
+        dcc.Store(id="store-playground", storage_type="local", data=[]),
+        dcc.Store(id="store-guardrails", storage_type="session", data={"guardrails": [
+            {"type": "volatility_discretionary_scaling", "enabled": False, "drop_threshold": 0.20, "rise_threshold": 0.20, "cut_pct": 0.15, "raise_pct": 0.10},
+            {"type": "funded_ratio_guardrail", "enabled": False, "fr_lower": 0.85, "fr_target": 1.05, "fr_upper": 1.30},
+        ]}),
         dcc.Store(id="store-run-id", storage_type="memory", data=None),
+        dcc.Store(id="store-undo-stack", storage_type="memory", data=[]),
         
         # Save modal
         dbc.Modal([

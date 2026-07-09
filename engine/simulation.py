@@ -4,7 +4,7 @@ from typing import Dict, Optional
 
 import numpy as np
 
-from engine.guardrails import CATEGORIES, build_handlers, compute_guardrail_stats
+from engine.guardrails import CATEGORIES, build_handlers, compute_guardrail_stats, precompute_pv
 from engine.params import SimulationParams, aggregate_schedule
 
 
@@ -49,8 +49,6 @@ def _ruin_distribution_by_year(ruined: np.ndarray, ruin_time: np.ndarray, factor
 ###############################################################################
 
 def run_simulation(params: SimulationParams, guardrails: Optional[list] = None) -> Dict[str, object]:
-    handlers = build_handlers(guardrails)
-
     rng = np.random.default_rng(params.random_seed)
     factor = 1 if params.annual else 12
 
@@ -89,9 +87,44 @@ def run_simulation(params: SimulationParams, guardrails: Optional[list] = None) 
             else:
                 lump_in[idx] += lump.amount
 
-    disc_out = spend_by_cat["lifestyle"] + spend_by_cat["gifts"] \
-        + lump_out_by_cat["lifestyle"] + lump_out_by_cat["gifts"]
+    # Discretionary outflow split into two independently-scalable buckets
+    # (PRD Stage 4 / source doc §9-11): `lifestyle` (recurring discretionary,
+    # the primary guardrail dial, cut AND raised) and `gifts` (optional lumpy —
+    # planned weddings/gifts/upgrades, only trimmed under stress, never raised
+    # above plan). Their sum is exactly the pre-Stage-4 `disc_out`, so the loop's
+    # `disc_out[i] * mult` line is untouched — the guardrail returns an effective
+    # multiplier that reproduces the two-bucket scaling.
+    lifestyle_out = spend_by_cat["lifestyle"] + lump_out_by_cat["lifestyle"]
+    gifts_out = spend_by_cat["gifts"] + lump_out_by_cat["gifts"]
+    disc_out = lifestyle_out + gifts_out
     strict_out = spend_by_cat["strict"] + lump_out_by_cat["strict"]
+
+    # Funded-ratio guardrail lookahead (PRD §3.3): PV of remaining committed
+    # net outflow and of each discretionary bucket, discounted at the plan's
+    # real discount rate. Built here — after the per-category outflow/inflow
+    # arrays exist — and handed to build_handlers as fixed context. rent_by_period
+    # duplicates the loop's inline per-period rent sum deliberately (cheap
+    # O(T x n_properties) prepass) so the proven inline loop math is untouched.
+    rent_by_period = np.array([
+        sum(p.rent_annual / factor for p in params.properties
+            if period >= (p.start_age if params.annual else p.start_age * 12))
+        for period in periods
+    ])
+    committed_net = strict_out - incomes - rent_by_period - lump_in
+    # Discount per PERIOD: precompute_pv exponentiates by the period index, so in
+    # monthly mode the rate must be the monthly-equivalent of the annual real
+    # discount rate (same conversion the portfolio return mean/sd get below).
+    dr = params.real_discount_rate
+    if not params.annual:
+        dr = (1 + dr) ** (1 / 12) - 1
+    pv_context = {
+        "pv_committed": precompute_pv(committed_net, dr),
+        "pv_lifestyle": precompute_pv(lifestyle_out, dr),
+        "pv_optional": precompute_pv(gifts_out, dr),
+        "lifestyle_out": lifestyle_out,
+        "gifts_out": gifts_out,
+    }
+    handlers = build_handlers(guardrails, pv_context)
 
     bal_over_time = np.full((n_periods, params.n_paths), 0.0)
     prop_over_time = np.full((n_periods, params.n_paths), 0.0)
@@ -138,7 +171,10 @@ def run_simulation(params: SimulationParams, guardrails: Optional[list] = None) 
         # never scaled.
         mult = np.ones(params.n_paths)
         for h in handlers:
-            mult *= h.multiplier(i, port_ret, params.n_paths)
+            # `bal` here is still the start-of-period balance (mutated below),
+            # matching the funded-ratio formula's "portfolio before this year's
+            # withdrawal" convention (PRD §3.3.2).
+            mult *= h.multiplier(i, port_ret, params.n_paths, bal=bal)
         outflow = strict_out[i] + disc_out[i] * mult
         cash_delta_bal = incomes[i] + rent_i + lump_in[i] - outflow
         for h in handlers:

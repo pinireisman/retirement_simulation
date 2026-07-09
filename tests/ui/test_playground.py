@@ -56,6 +56,27 @@ def test_run_with_events_badge(loaded_page):
     expect(loaded_page.locator("#div-view-dashboard")).to_be_visible()
 
 
+@pytest.mark.ux("UX-PG-05")
+def test_events_persist_across_reload_and_plan_load(loaded_page):
+    """Events live in localStorage: they survive a page reload (server restart
+    equivalent from the browser's view) and loading a different plan."""
+    from tests.ui.conftest import EXAMPLE_XLSX
+
+    journeys.enable_playground(loaded_page)
+    journeys.add_playground_event(loaded_page, -200_000, "persist me")
+    chips = loaded_page.locator("#div-playground-chips")
+    expect(chips).to_contain_text("persist me")
+
+    loaded_page.reload()
+    expect(chips).to_contain_text("persist me")
+
+    journeys.upload_scenario(loaded_page, str(EXAMPLE_XLSX))
+    expect(chips).to_contain_text("persist me")
+
+    # Clean up localStorage so state doesn't leak into a reused browser context.
+    journeys.clear_playground_events(loaded_page)
+
+
 @pytest.mark.ux("UX-PG-04")
 def test_clear_all(loaded_page):
     """Clear-all removes chips and markers."""

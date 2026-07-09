@@ -67,9 +67,16 @@ TEMPLATE:
 """ + REPORT_TEMPLATE
 
 
+PREFERRED_MODELS = ["froggeric/qwen3.6-27b-mlx-8bit", "qwen/qwen3-coder-30b"]
+
+
 def pick_model(base_url: str) -> str:
     with urllib.request.urlopen(f"{base_url}/models", timeout=5) as r:
         ids = [m["id"] for m in json.load(r)["data"]]
+    by_lower = {i.lower(): i for i in ids}
+    for pref in PREFERRED_MODELS:
+        if pref in by_lower:
+            return by_lower[pref]
     coders = [i for i in ids if "coder" in i.lower()]
     return (coders or ids)[0]
 

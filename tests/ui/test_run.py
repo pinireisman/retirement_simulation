@@ -91,3 +91,32 @@ def test_run_speed_bound(loaded_page):
     # run_simulation has timeout=60_000 by default; use 30s for this test
     journeys.run_simulation(loaded_page, timeout=30_000)
     # If we get here without timeout, the test passes
+
+
+@pytest.mark.ux("UX-RUN-05")
+def test_cash_flow_plot_fits_card(loaded_page):
+    """The cash-flow panel grows with its legend; the rendered plot must stay
+    inside its own card instead of bleeding over the Annual-draw row below."""
+    journeys.set_fast_run(loaded_page)
+    journeys.run_simulation(loaded_page)
+    loaded_page.wait_for_selector("#graph-results .main-svg", timeout=30_000)
+    loaded_page.wait_for_timeout(1000)  # height-sync runs a frame after render
+
+    def box(sel):
+        return loaded_page.locator(sel).first.bounding_box()
+
+    cf_card = box("#graph-results >> xpath=ancestor::*[contains(@class,'chart-card')]")
+    cf_plot = box("#graph-results .main-svg")
+    draw_card = box("#graph-draw >> xpath=ancestor::*[contains(@class,'chart-card')]")
+
+    assert cf_plot["height"] > 100, f"cash-flow plot collapsed: {cf_plot}"
+    plot_bottom = cf_plot["y"] + cf_plot["height"]
+    card_bottom = cf_card["y"] + cf_card["height"]
+    assert plot_bottom <= card_bottom + 2, (
+        f"cash-flow plot overflows its card: plot bottom {plot_bottom}, "
+        f"card bottom {card_bottom}")
+    assert not (cf_card["x"] < draw_card["x"] + draw_card["width"]
+                and draw_card["x"] < cf_card["x"] + cf_card["width"]
+                and cf_card["y"] < draw_card["y"] + draw_card["height"]
+                and draw_card["y"] < card_bottom), (
+        f"cards overlap: cash-flow {cf_card}, annual-draw {draw_card}")

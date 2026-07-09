@@ -128,6 +128,23 @@
   color: var(--ink) !important;
   border-color: var(--panel-border) !important;
 }
+/* Dash 4 hardcodes light-theme design tokens (--Dash-Text-Weak etc.) that
+   its option buttons use directly, so inherited color never wins — remap
+   the tokens themselves for dark mode. :root prefix out-specifies Dash's
+   runtime-injected `:root { --Dash-* }` block regardless of load order. */
+:root[data-bs-theme="dark"] {
+  --Dash-Text-Primary: var(--ink);
+  --Dash-Text-Strong: var(--ink);
+  --Dash-Text-Weak: var(--ink-2);
+  --Dash-Text-Disabled: rgba(231, 233, 238, .4);
+  --Dash-Stroke-Strong: rgba(231, 233, 238, .45);
+  --Dash-Stroke-Weak: var(--panel-border);
+  --Dash-Fill-Disabled: rgba(231, 233, 238, .1);
+  --Dash-Fill-Inverse-Strong: var(--surface);
+  --Dash-Fill-Interactive-Weak: rgba(231, 233, 238, .06);
+  --Dash-Fill-Primary-Hover: rgba(231, 233, 238, .04);
+  --Dash-Fill-Primary-Active: rgba(231, 233, 238, .08);
+}
 [data-bs-theme="dark"] .dash-dropdown-option:hover,
 [data-bs-theme="dark"] .dash-dropdown-option.selected {
   background-color: var(--canvas) !important;
@@ -384,4 +401,35 @@ body {
    force the caret visible whenever the input is genuinely focused. */
 .dash-cell-value.unfocused:focus {
   caret-color: var(--ink) !important;
+}
+
+/* Chart maximize — Phase B */
+.chart-card { position: relative; }
+/* responsive=True puts inline height:100% on .dash-graph; 100% of a content-sized
+   card is 0, so the graph collapses. !important is required to beat the inline style;
+   the .maximized rules below still win on specificity. `auto` (not a fixed px) so
+   figures that set their own layout.height (e.g. cash flow's legend-sized panel)
+   grow the card instead of overflowing into the pane below. */
+.chart-card .dash-graph { height: auto !important; min-height: 450px; }
+.chart-card.maximized {
+  position: fixed;
+  inset: 16px;
+  z-index: 2000;
+  background: var(--md-surface-1, var(--surface));
+  box-shadow: 0 8px 40px rgba(0, 0, 0, .5);
+  display: flex;
+  flex-direction: column;
+}
+.chart-card.maximized .dash-graph,
+.chart-card.maximized .js-plotly-plot,
+.chart-card.maximized .plot-container {
+  flex: 1 1 auto;
+  height: 100% !important;
+  width: 100% !important;
+}
+.btn-maximize {
+  cursor: pointer;
+  font-size: 1.1rem;
+  line-height: 1;
+  text-decoration: none;
 }

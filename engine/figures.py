@@ -1,4 +1,3 @@
-import colorsys
 from collections import OrderedDict
 from typing import Dict, List, Tuple
 
@@ -27,6 +26,8 @@ from engine.theme import (  # re-exported for compat
     HISTORIC_BOUNDARY_LINE,
     DANGER,
     SUCCESS,
+    PRIMARY,
+    _shade,
 )
 
 PANEL_HEIGHT = 420
@@ -41,22 +42,6 @@ def _cash_flow_panel_height(n_legend_items: int) -> int:
     scroll handle (the "scrolling inside a chart" complaint this redesign
     was meant to kill). Grow the panel with the legend instead."""
     return max(PANEL_HEIGHT, 340 + n_legend_items * 30)
-
-
-def _shade(hex_color: str, index: int) -> str:
-    """Shade a hex color +-10% lightness per index, so multiple bands of the
-    same category stay distinguishable in the chart legend."""
-    if index == 0:
-        return hex_color
-    r = int(hex_color[1:3], 16) / 255
-    g = int(hex_color[3:5], 16) / 255
-    b = int(hex_color[5:7], 16) / 255
-    h, l, s = colorsys.rgb_to_hls(r, g, b)
-    magnitude = 0.1 * ((index + 1) // 2)
-    sign = 1 if index % 2 else -1
-    l = min(0.78, max(0.22, l + sign * magnitude))  # stay off near-black/near-white so hue reads at a glance
-    r, g, b = colorsys.hls_to_rgb(h, l, s)
-    return "#{:02X}{:02X}{:02X}".format(round(r * 255), round(g * 255), round(b * 255))
 
 
 ###############################################################################
@@ -142,7 +127,9 @@ def build_cash_flow_series(params: SimulationParams, annual=True) \
         arr[ages == lp.age * factor] = lp.amount
         label = f"Lump · {lp.label}"
         series[label] = arr
-        if lp.amount < 0:
+        if lp.playground:
+            colors[label] = PLAYGROUND_COLOR  # match the diamond markers
+        elif lp.amount < 0:
             idx = lump_cat_counts.get(lp.category, 0)
             lump_cat_counts[lp.category] = idx + 1
             colors[label] = _shade(CATEGORY_COLORS.get(lp.category, CATEGORY_COLORS["strict"]), idx)
@@ -337,6 +324,28 @@ def fig_historic(results: Dict, hr: Dict) -> go.Figure:
     fig.update_layout(
         template=PLOTLY_TEMPLATE, height=PANEL_HEIGHT, legend=_PANEL_LEGEND,
         xaxis_title="Age", yaxis_title="₪ balance (real)", shapes=shapes,
+    )
+    return fig
+
+
+def fig_return_distribution(mu, sigma, fat_tails_enabled, fat_tails_df):
+    """Histogram preview of the assumed per-period real-return distribution.
+    Reuses the simulation engine's own sampler so the preview can't drift
+    out of sync with what a real run actually does."""
+    rng = np.random.default_rng(0)
+    n = 20_000
+    if fat_tails_enabled and fat_tails_df:
+        from engine.simulation import sample_real_returns
+        sample = sample_real_returns(n, mean=mu, std=sigma, df=fat_tails_df,
+                                      clipping_thr=(-0.99, 0.99), rng=rng)
+    else:
+        sample = rng.normal(mu, sigma, n)
+    fig = go.Figure(data=[go.Histogram(x=sample.tolist(), histnorm="probability density",
+                                        marker_color=PRIMARY, nbinsx=60)])
+    fig.update_layout(
+        template=PLOTLY_TEMPLATE, height=220, showlegend=False,
+        margin=dict(l=30, r=10, t=10, b=30),
+        xaxis_tickformat=".0%",
     )
     return fig
 

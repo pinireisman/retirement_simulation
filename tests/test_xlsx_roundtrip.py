@@ -28,7 +28,9 @@ def test_roundtrip():
             "fat_tails_df": 5,
             "mode": "monthly",
             "n_paths": 500,
-            "random_seed": 7
+            "random_seed": 7,
+            "mu": None,
+            "sigma": None
         },
         "spending_bands": [
             {
