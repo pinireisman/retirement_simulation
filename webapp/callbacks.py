@@ -42,7 +42,6 @@ from engine.theme import PLOTLY_TEMPLATE, SERIES_NET_CASH_FLOW, tone_for_ruin
 from webapp.components import build_stat_tile, build_badge_row, build_chart_card
 
 _GUARDRAIL_DISPLAY_NAMES = {
-    "volatility_discretionary_scaling": "Spending guardrail",
     "funded_ratio_guardrail": "Funded ratio guardrail",
 }
 _TONE_COLOR = {"success": "var(--success)", "borderline": "var(--warning)", "danger": "var(--danger)"}
@@ -564,11 +563,7 @@ def register_callbacks(app) -> None:
 
     @app.callback(
         Output("store-guardrails", "data"),
-        Input("dd-guardrail-strategy", "value"),
-        Input("slider-g1-drop", "value"),
-        Input("slider-g1-rise", "value"),
-        Input("slider-g1-cut", "value"),
-        Input("slider-g1-raise", "value"),
+        Input("switch-guardrails-enabled", "value"),
         Input("dd-g2-goal", "value"),
         Input("dd-g2-tolerance", "value"),
         Input("chk-g2-flex-lumps", "value"),
@@ -577,32 +572,23 @@ def register_callbacks(app) -> None:
         Input("slider-g2-target", "value"),
         Input("slider-g2-upper", "value"),
     )
-    def collect_guardrails(strategy, drop, rise, cut, raise_pct,
-                           goal, tolerance, flex_lumps, manual,
+    def collect_guardrails(enabled, goal, tolerance, flex_lumps, manual,
                            fr_lower, fr_target, fr_upper):
-        """Callback #15. Strategy-aware: exactly one guardrail entry is enabled.
-        G2 has two shapes — goal-based confidence presets (default) or the
-        Advanced manual funded-ratio thresholds (no `mode` key -> engine manual
-        path). The discount-rate slider is a SimulationParams field and feeds
-        store-scenario via collect_edits, not this store."""
+        """Callback #15. G2 has two shapes — goal-based confidence presets
+        (default) or the Advanced manual funded-ratio thresholds (no `mode`
+        key -> engine manual path). The discount-rate slider is a
+        SimulationParams field and feeds store-scenario via collect_edits,
+        not this store."""
         if manual:
-            g2 = {"type": "funded_ratio_guardrail",
-                  "enabled": strategy == "funded_ratio_guardrail",
+            g2 = {"type": "funded_ratio_guardrail", "enabled": enabled,
                   "fr_lower": fr_lower / 100, "fr_target": fr_target / 100,
                   "fr_upper": fr_upper / 100}
         else:
-            g2 = {"type": "funded_ratio_guardrail",
-                  "enabled": strategy == "funded_ratio_guardrail",
+            g2 = {"type": "funded_ratio_guardrail", "enabled": enabled,
                   "mode": "confidence",
                   **_G2_GOALS[goal], **_G2_TOLERANCE[tolerance],
                   "c_severe": 0.80 if flex_lumps else None}
-        return {"guardrails": [
-            {"type": "volatility_discretionary_scaling",
-             "enabled": strategy == "volatility_discretionary_scaling",
-             "drop_threshold": drop / 100, "rise_threshold": rise / 100,
-             "cut_pct": cut / 100, "raise_pct": raise_pct / 100},
-            g2,
-        ]}
+        return {"guardrails": [g2]}
 
     @app.callback(
         Output("collapse-guardrails", "is_open"),
@@ -613,17 +599,6 @@ def register_callbacks(app) -> None:
     def toggle_guardrail_panel(n_clicks, is_open):
         """Callback #16."""
         return not is_open
-
-    @app.callback(
-        Output("block-g1", "style"),
-        Output("block-g2", "style"),
-        Input("dd-guardrail-strategy", "value"),
-    )
-    def toggle_guardrail_blocks(strategy):
-        """Show only the selected strategy's slider block; hide the other."""
-        show, hide = {"display": "block"}, {"display": "none"}
-        return (show if strategy == "volatility_discretionary_scaling" else hide,
-                show if strategy == "funded_ratio_guardrail" else hide)
 
     @app.callback(
         Output("block-g2-manual", "style"),

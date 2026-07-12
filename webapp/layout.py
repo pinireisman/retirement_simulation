@@ -90,6 +90,10 @@ def build_layout():
                             dbc.Switch(id="switch-historic", label="Include historic scenarios", value=False),
                             className="mt-2",
                         ),
+                        html.Div(
+                            dbc.Switch(id="switch-guardrails-enabled", label="Enable spending guardrails", value=False),
+                            className="mt-2",
+                        ),
                     ], width=6),
                 ]),
             ], id="div-hero", className="wash-neutral p-4 mb-3"),
@@ -298,30 +302,11 @@ def build_layout():
                     ], label="Properties", tab_id="tab-properties"),
                 ]),
                 
-                # Guardrails panel
+                # Guardrails panel — enable/disable lives on the Dashboard
+                # (switch-guardrails-enabled); this panel only configures thresholds.
                 dbc.Button("Guardrails", id="btn-guardrails-header", color="outline-secondary", className="mb-2"),
                 dbc.Collapse([
-                    html.Div("Strategy:", className="mt-2"),
-                    dcc.Dropdown(id="dd-guardrail-strategy",
-                                 options=[{"label": "None", "value": "none"},
-                                          {"label": "Volatility-based (G1)", "value": "volatility_discretionary_scaling"},
-                                          {"label": "Funded ratio (G2)", "value": "funded_ratio_guardrail"}],
-                                 value="none", clearable=False),
                     # Percent units in the UI; collect_guardrails converts to fractions.
-                    html.Div([
-                        html.Div("Drop threshold (%):", className="mt-2"),
-                        dcc.Slider(id="slider-g1-drop", min=5, max=50, step=1, value=20,
-                                   tooltip={"placement": "bottom", "template": "{value}%"}),
-                        html.Div("Rise threshold (%):", className="mt-2"),
-                        dcc.Slider(id="slider-g1-rise", min=5, max=50, step=1, value=20,
-                                   tooltip={"placement": "bottom", "template": "{value}%"}),
-                        html.Div("Cut percentage (%):", className="mt-2"),
-                        dcc.Slider(id="slider-g1-cut", min=0, max=50, step=1, value=15,
-                                   tooltip={"placement": "bottom", "template": "{value}%"}),
-                        html.Div("Raise percentage (%):", className="mt-2"),
-                        dcc.Slider(id="slider-g1-raise", min=0, max=50, step=1, value=10,
-                                   tooltip={"placement": "bottom", "template": "{value}%"}),
-                    ], id="block-g1", style={"display": "none"}),
                     html.Div([
                         html.Div("What should the guardrails do for you?", className="mt-2"),
                         dcc.RadioItems(id="dd-g2-goal",
@@ -358,7 +343,7 @@ def build_layout():
                         html.Div("Real discount rate (%):", className="mt-2"),
                         dcc.Slider(id="slider-g2-discount", min=0, max=4, step=0.25, value=1,
                                    tooltip={"placement": "bottom", "template": "{value}%"}),
-                    ], id="block-g2", style={"display": "none"}),
+                    ], id="block-g2"),
                 ], id="collapse-guardrails", is_open=False),
 
         ]), id="div-view-plan", style={"display": "none"}),
@@ -373,7 +358,6 @@ def build_layout():
         # localStorage: playground events survive server restarts and plan loads
         dcc.Store(id="store-playground", storage_type="local", data=[]),
         dcc.Store(id="store-guardrails", storage_type="session", data={"guardrails": [
-            {"type": "volatility_discretionary_scaling", "enabled": False, "drop_threshold": 0.20, "rise_threshold": 0.20, "cut_pct": 0.15, "raise_pct": 0.10},
             {"type": "funded_ratio_guardrail", "enabled": False, "mode": "confidence",
              "c_cut": 0.85, "c_target": 0.95, "c_raise": 0.99, "c_severe": 0.80,
              "min_multiplier": 0.75, "max_cut_per_year": 0.10},
