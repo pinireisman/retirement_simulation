@@ -52,10 +52,10 @@ _TONE_COLOR = {"success": "var(--success)", "borderline": "var(--warning)", "dan
 RESULTS_CACHE: "OrderedDict[str, dict]" = OrderedDict()
 _CACHE_SIZE = 5
 
-# Module-level state for the store<->UI circular-update guard and the
-# "unsaved changes" header dot. Single-process, single-user app (PRD §3.2) —
-# no session-keyed state needed.
-_last_hydrated_json = {"value": None}
+# Module-level state for the "unsaved changes" header dot. Single-process,
+# single-user app (PRD §3.2). NOTE: the store<->UI hydration guard is NOT kept
+# here — server state outlives page refreshes, which broke first-render
+# hydration; it lives in the memory-type store-hydrate-guard instead.
 _dirty = {"value": False}
 
 
@@ -267,17 +267,21 @@ def register_callbacks(app) -> None:
         Output("tbl-lumps", "data"),
         Output("tbl-properties", "data"),
         Output("header-scenario-name", "children"),
+        Output("store-hydrate-guard", "data"),
         Input("store-scenario", "data"),
+        State("store-hydrate-guard", "data"),
     )
-    def hydrate_tabs(scenario):
+    def hydrate_tabs(scenario, last_hydrated):
         """Store -> widgets. Guarded against re-triggering on its own echo
         from collect_edits (see module docstring): compares a serialized
-        snapshot of the incoming store value against the last one this
-        callback itself rendered, and no-ops when they match."""
+        snapshot of the incoming store value against the last one THIS PAGE
+        rendered. The guard lives in a memory-type dcc.Store so it dies with
+        the page: a server-side guard outlived refreshes and made this
+        callback skip the first render of a fresh page (empty tables until
+        something else dirtied the store, e.g. a second Load click)."""
         snapshot = json.dumps(scenario, sort_keys=True)
-        if snapshot == _last_hydrated_json["value"]:
-            return (no_update,) * 16
-        _last_hydrated_json["value"] = snapshot
+        if snapshot == last_hydrated:
+            return (no_update,) * 17
 
         portfolio = scenario["portfolio"]
         name = scenario.get("name", "untitled")
@@ -311,6 +315,7 @@ def register_callbacks(app) -> None:
             scenario.get("lumps", []),
             scenario.get("properties", []),
             header,
+            snapshot,
         )
 
     TABLE_TRIGGER_IDS = {

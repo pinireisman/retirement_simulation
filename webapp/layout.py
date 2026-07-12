@@ -377,6 +377,11 @@ def build_layout():
              "c_cut": 0.85, "c_target": 0.95, "c_raise": 0.99, "c_severe": 0.80,
              "min_multiplier": 0.75, "max_cut_per_year": 0.10},
         ]}),
+        # Hydration echo-guard. MUST be memory-type: its job is to track what
+        # THIS page's widgets last rendered, so it has to reset on refresh (a
+        # server-side guard survives refreshes and made hydrate_tabs skip the
+        # first store->widgets render of a fresh page: empty tables).
+        dcc.Store(id="store-hydrate-guard", storage_type="memory", data=None),
         dcc.Store(id="store-run-id", storage_type="memory", data=None),
         dcc.Store(id="store-undo-stack", storage_type="memory", data=[]),
         
