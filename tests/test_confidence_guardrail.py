@@ -35,21 +35,25 @@ def make_params(**over):
 
 def test_calibrate_exact_on_hand_built_paths():
     """4 paths, 2 years. Balances at year 0: [400, 300, 200, 100]; success =
-    [T, T, F, T] (the 200-path fails). Richest-first prefix success fractions:
-    400->1/1, 300->2/2, 200->2/3, 100->3/4.
-      p=1.00: last prefix with frac>=1 is the top-2 -> W = 300.
-      p=0.75: full prefix qualifies (3/4) -> W = 100 (poorest).
-      p=0.90: only top-2 (1.0) qualify -> W = 300.
+    [T, T, F, T] (the 200-path fails). Wealth-ascending success [1, 0, 1, 1]
+    isotonic-fits (PAV pools the 1,0 violation) to [0.5, 0.5, 1, 1]:
+      p=1.00 / 0.90: first fitted >= p is wealth 300.
+      p=0.75: 0.5 < 0.75, so still wealth 300.
+      p=0.50: fitted 0.5 at the poorest -> wealth 100.
+    The CONDITIONAL fit is the point: a cumulative richest-first construction
+    would return 100 for p=0.75 (overall 3/4 success drags the average up) —
+    exactly the degeneracy that made cut triggers fire only on doomed paths.
     """
     start_bal = np.array([[400.0, 300.0, 200.0, 100.0],
                           [40.0, 30.0, 20.0, 10.0]])
     success = np.array([True, True, False, True])
-    W = calibrate_wealth_needed(start_bal, success, (1.00, 0.90, 0.75))
+    W = calibrate_wealth_needed(start_bal, success, (1.00, 0.90, 0.75, 0.50))
     assert W[1.00][0] == 300.0
     assert W[0.90][0] == 300.0
-    assert W[0.75][0] == 100.0
+    assert W[0.75][0] == 300.0
+    assert W[0.50][0] == 100.0
     # year 1 has the same ordering, scaled balances
-    assert W[1.00][1] == 30.0 and W[0.75][1] == 10.0
+    assert W[1.00][1] == 30.0 and W[0.50][1] == 10.0
 
 
 def test_calibrate_edges_all_succeed_and_unreachable():
@@ -105,12 +109,19 @@ def test_protect_mode_never_reduces_success():
     assert prot["guardrail_stats"]["frac_paths_cut"] > 0.0
 
 
-def test_confidence_noop_when_thresholds_never_bind():
-    """c_cut at the observable floor (poorest baseline path) and c_raise=None:
-    no dial ever moves -> bit-identical to guardrails=None."""
-    tiny = dict(mode="confidence", c_cut=0.0001, c_target=0.0001, c_raise=None)
-    baseline = run_simulation(make_params())
-    guarded = run_simulation(make_params(), guardrails=_g2(tiny))
+def test_confidence_noop_when_plan_cannot_fail():
+    """On a plan with zero ruin, every path's conditional success is 1.0, so
+    W[p][t] is the poorest path's wealth; the poorest path sits exactly AT the
+    threshold (strict <, no cut) and c_raise=None never raises -> bit-identical
+    to guardrails=None. (With the isotonic estimator there is deliberately no
+    'never binding' c_cut on a plan that CAN fail: failing paths' local success
+    is 0, so any positive threshold sits above them — that's the fix for cut
+    triggers only firing on doomed paths.)"""
+    rich = dict(initial_portfolio=30_000_000)   # ruin_probability == 0
+    tiny = dict(mode="confidence", c_cut=0.90, c_target=0.97, c_raise=None)
+    baseline = run_simulation(make_params(**rich))
+    assert baseline["summary"]["ruin_probability"] == 0.0
+    guarded = run_simulation(make_params(**rich), guardrails=_g2(tiny))
     assert baseline["summary"] == guarded["summary"]
     np.testing.assert_array_equal(baseline["bal_over_time"], guarded["bal_over_time"])
 

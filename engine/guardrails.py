@@ -53,23 +53,49 @@ class VolatilityDiscretionaryScaling:
         return mult
 
 
+def _pav_nondecreasing(y: np.ndarray) -> np.ndarray:
+    """Isotonic (non-decreasing) least-squares fit via pool-adjacent-violators.
+    Returns the fitted values, same length as y. O(n)."""
+    # pools of (mean, count), merged whenever a new value breaks monotonicity
+    means: list = []
+    counts: list = []
+    for v in y:
+        m, c = float(v), 1
+        while means and means[-1] > m:
+            pm, pc = means.pop(), counts.pop()
+            m = (m * c + pm * pc) / (c + pc)
+            c += pc
+        means.append(m)
+        counts.append(c)
+    return np.repeat(means, counts)
+
+
 def calibrate_wealth_needed(start_bal: np.ndarray, success: np.ndarray,
                             confidences: tuple) -> dict:
-    """W[p][t] = smallest start-of-period-t liquid balance such that baseline
-    paths holding at least that balance went on to succeed with frequency >= p
-    (PRD_GOAL_BASED_GUARDRAILS.md §2.1). np.inf where no observed wealth level
-    reaches p (that year always reads 'behind'); 0.0 where even the poorest
-    paths reach p (never 'behind'). Deterministic; estimates assume baseline
-    (unguarded) spending, per the source doc's one-shot calibration method."""
+    """W[p][t] = smallest start-of-period-t liquid balance at which baseline
+    paths' CONDITIONAL success probability (success regressed on wealth,
+    isotonic fit) reaches p (PRD_GOAL_BASED_GUARDRAILS.md §2.1). np.inf where
+    no observed wealth level reaches p (that year always reads 'behind').
+
+    The conditional fit matters: a cumulative "everyone richer than W succeeds
+    >= p of the time" construction degenerates whenever the plan's OVERALL
+    success rate exceeds p — the healthy mass drags the running average up, W
+    collapses to ~0, and cut triggers only fire on already-doomed paths (seen
+    live: protect mode recovering nothing on a 95%-success plan with a huge
+    trimmable-gifts ceiling). Isotonic regression answers the local question
+    "how do paths AT this wealth level fare", so thresholds land at the
+    genuinely at-risk tail regardless of overall plan health. Deterministic;
+    estimates assume baseline (unguarded) spending, per the source doc's
+    one-shot calibration method."""
     T, n = start_bal.shape
     out = {p: np.zeros(T) for p in confidences}
     for t in range(T):
-        order = np.argsort(-start_bal[t])              # richest first
+        order = np.argsort(start_bal[t])               # poorest first
         sorted_bal = start_bal[t][order]
-        frac = np.cumsum(success[order]) / np.arange(1, n + 1)
+        fit = _pav_nondecreasing(success[order].astype(float))
         for p in confidences:
-            ok = np.nonzero(frac >= p)[0]
-            out[p][t] = np.inf if ok.size == 0 else sorted_bal[ok[-1]]
+            idx = np.searchsorted(fit, p, side="left")  # fit is non-decreasing
+            out[p][t] = np.inf if idx == n else sorted_bal[idx]
     return out
 
 

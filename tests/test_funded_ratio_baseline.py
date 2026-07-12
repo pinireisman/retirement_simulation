@@ -79,13 +79,17 @@ def test_goal_preset_baselines_pinned_on_stressed_example():
             GuardrailConfig(type="funded_ratio_guardrail", options=opts),
         ])["summary"]["ruin_probability"]
 
-    pinned = {"baseline": 0.1410, "protect": 0.1319, "balanced": 0.1418, "upside": 0.1531}
+    # Values from the isotonic (conditional) calibration estimator — the
+    # earlier cumulative-prefix estimator degenerated whenever overall plan
+    # success exceeded c_cut (thresholds ~0, cuts only on doomed paths).
+    pinned = {"baseline": 0.1410, "protect": 0.0693, "balanced": 0.0910, "upside": 0.1014}
     for name, expected in pinned.items():
         assert abs(ruin[name] - expected) < 0.01, f"{name}: {ruin[name]} vs {expected}"
-    # the promises the presets make:
+    # the promises the presets make (all three now genuinely protect the tail;
+    # they differ in how much upside they trade for it):
     assert ruin["protect"] <= ruin["baseline"]           # protect never hurts
-    assert ruin["balanced"] <= ruin["baseline"] + 0.01   # balanced costs <1%
-    assert ruin["upside"] <= ruin["baseline"] + 0.02     # upside costs <2%
+    assert ruin["protect"] <= ruin["balanced"] <= ruin["upside"]  # defense ordering
+    assert ruin["upside"] <= ruin["baseline"] + 0.02
 
 
 def test_g2_is_seeded_deterministic():

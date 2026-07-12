@@ -73,6 +73,16 @@ def calibrate_wealth_needed(bal_over_time: np.ndarray,   # (T, n_paths), baselin
     return out
 ```
 
+**Estimator correction (2026-07-12, post-ship):** the prefix construction shown
+above degenerates whenever overall plan success exceeds p — the healthy mass
+drags the cumulative average above p all the way down the wealth ordering, W
+collapses to ~0, and cut triggers fire only on already-doomed paths (observed
+live: protect mode recovering nothing on a 95%-success plan whose trimmable
+ceiling was 99.9%). The shipped implementation instead fits success~wealth with
+isotonic regression (pool-adjacent-violators) and takes W[p][t] = smallest
+wealth whose *conditional* fitted probability reaches p. Same signature, same
+edges (inf when unreachable), same one-shot approximation.
+
 Notes:
 - `success` comes from the baseline run's existing per-path ruin bookkeeping
   (ruined paths are frozen at 0, so `bal_over_time[-1] > 0` is equivalent if no
