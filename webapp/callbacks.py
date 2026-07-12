@@ -31,7 +31,7 @@ from dash import ALL, Input, Output, State, ctx, html, no_update
 
 from engine.figures import (
     PLAYGROUND_COLOR, build_cash_flow_series, net_cash_flow,
-    fig_cash_flow, fig_portfolio, fig_draw, fig_historic, get_ruin_explanation,
+    fig_cash_flow, fig_portfolio, fig_draw, fig_guardrail_multiplier, fig_historic, get_ruin_explanation,
     fig_return_distribution,
 )
 from engine.guardrails import parse_guardrail_configs
@@ -157,7 +157,8 @@ def _result_badges(badges: list[str]):
     return build_badge_row([{"text": b, "color": "warning"} for b in badges])
 
 
-def _stat_tiles(summary: dict, guardrail_stats: dict | None = None):
+def _stat_tiles(summary: dict, guardrail_stats: dict | None = None,
+                baseline_summary: dict | None = None):
     tiles = [
         build_stat_tile("Median portfolio", f"₪{summary['portfolio_median']:,.0f}"),
         build_stat_tile("Median property", f"₪{summary['property_median']:,.0f}"),
@@ -173,6 +174,33 @@ def _stat_tiles(summary: dict, guardrail_stats: dict | None = None):
         ))
     else:
         tiles.append(build_stat_tile("Spending guardrail", "Off"))
+    # Goal-based report (PRD_GOAL_BASED_GUARDRAILS.md §3.5): with/without-policy
+    # confidence (free from the calibration pass) and the deepest realistic cut.
+    if baseline_summary is not None:
+        tiles.append(build_stat_tile(
+            "Plan confidence",
+            f"{1 - summary['ruin_probability']:.1%} with policy · "
+            f"{1 - baseline_summary['ruin_probability']:.1%} without",
+        ))
+    if guardrail_stats and "worst5_min_mult" in guardrail_stats:
+        worst = 1 - guardrail_stats["worst5_min_mult"]
+        med = 1 - guardrail_stats["median_min_mult"]
+        med_txt = "median unchanged" if med < 0.005 else f"median cut {med:.0%}"
+        tiles.append(build_stat_tile(
+            "Worst 5% of futures",
+            ("no spending cut" if worst < 0.005 else f"spending cut up to {worst:.0%}")
+            + f" · {med_txt}",
+        ))
+        # Pair the confidence delta with what it bought (Stage-4 sign-off
+        # condition): a user who chose raises must see the upside taken, not
+        # only the confidence cost.
+        peak = guardrail_stats.get("median_max_mult", 1.0) - 1
+        if peak > 0.005:
+            tiles.append(build_stat_tile(
+                "Upside taken",
+                f"median future: spending raised up to +{peak:.0%} "
+                f"({guardrail_stats['frac_paths_raised']:.0%} of futures raised)",
+            ))
     return dbc.Row([dbc.Col(t, width=3) for t in tiles], className="g-2 mb-3")
 
 
@@ -208,6 +236,8 @@ def execute_run(scenario: dict, guardrail_cfg: dict, playground_events: list[dic
         "portfolio": fig_portfolio(results),
         "draw": fig_draw(results),
         "historic": historic_figs,
+        "guardrail": (fig_guardrail_multiplier(results)
+                      if results.get("guardrail_mult_percentiles") else None),
     }
 
     run_id = str(uuid.uuid4())
@@ -215,7 +245,8 @@ def execute_run(scenario: dict, guardrail_cfg: dict, playground_events: list[dic
     if len(RESULTS_CACHE) > _CACHE_SIZE:
         RESULTS_CACHE.popitem(last=False)
 
-    return run_id, figures, results["summary"], badges, results["guardrail_stats"]
+    return (run_id, figures, results["summary"], badges,
+            results["guardrail_stats"], results["baseline_summary"])
 
 
 def register_callbacks(app) -> None:
@@ -513,6 +544,19 @@ def register_callbacks(app) -> None:
         """Callback #14."""
         return []
 
+    # PRD_GOAL_BASED_GUARDRAILS.md §3.2 preset mappings (initial values; Stage 4
+    # calibrates them against the repo scenarios).
+    _G2_GOALS = {
+        "protect": {"c_cut": 0.90, "c_target": 0.97, "c_raise": None},
+        "balanced": {"c_cut": 0.85, "c_target": 0.95, "c_raise": 0.99},
+        "upside": {"c_cut": 0.75, "c_target": 0.90, "c_raise": 0.95},
+    }
+    _G2_TOLERANCE = {
+        "little": {"min_multiplier": 0.90, "max_cut_per_year": 0.05},
+        "quarter": {"min_multiplier": 0.75, "max_cut_per_year": 0.10},
+        "half": {"min_multiplier": 0.50, "max_cut_per_year": 0.15},
+    }
+
     @app.callback(
         Output("store-guardrails", "data"),
         Input("dd-guardrail-strategy", "value"),
@@ -520,24 +564,39 @@ def register_callbacks(app) -> None:
         Input("slider-g1-rise", "value"),
         Input("slider-g1-cut", "value"),
         Input("slider-g1-raise", "value"),
+        Input("dd-g2-goal", "value"),
+        Input("dd-g2-tolerance", "value"),
+        Input("chk-g2-flex-lumps", "value"),
+        Input("chk-g2-manual", "value"),
         Input("slider-g2-lower", "value"),
         Input("slider-g2-target", "value"),
         Input("slider-g2-upper", "value"),
     )
-    def collect_guardrails(strategy, drop, rise, cut, raise_pct, fr_lower, fr_target, fr_upper):
-        """Callback #15. PRD §4.3 schema, strategy-aware: exactly one guardrail
-        entry is enabled — the one the dropdown selects. Sliders are in percent;
-        store keeps fractions. The discount-rate slider is a SimulationParams
-        field, not a guardrail option, so it feeds store-scenario (collect_edits),
-        not this store."""
+    def collect_guardrails(strategy, drop, rise, cut, raise_pct,
+                           goal, tolerance, flex_lumps, manual,
+                           fr_lower, fr_target, fr_upper):
+        """Callback #15. Strategy-aware: exactly one guardrail entry is enabled.
+        G2 has two shapes — goal-based confidence presets (default) or the
+        Advanced manual funded-ratio thresholds (no `mode` key -> engine manual
+        path). The discount-rate slider is a SimulationParams field and feeds
+        store-scenario via collect_edits, not this store."""
+        if manual:
+            g2 = {"type": "funded_ratio_guardrail",
+                  "enabled": strategy == "funded_ratio_guardrail",
+                  "fr_lower": fr_lower / 100, "fr_target": fr_target / 100,
+                  "fr_upper": fr_upper / 100}
+        else:
+            g2 = {"type": "funded_ratio_guardrail",
+                  "enabled": strategy == "funded_ratio_guardrail",
+                  "mode": "confidence",
+                  **_G2_GOALS[goal], **_G2_TOLERANCE[tolerance],
+                  "c_severe": 0.80 if flex_lumps else None}
         return {"guardrails": [
             {"type": "volatility_discretionary_scaling",
              "enabled": strategy == "volatility_discretionary_scaling",
              "drop_threshold": drop / 100, "rise_threshold": rise / 100,
              "cut_pct": cut / 100, "raise_pct": raise_pct / 100},
-            {"type": "funded_ratio_guardrail",
-             "enabled": strategy == "funded_ratio_guardrail",
-             "fr_lower": fr_lower / 100, "fr_target": fr_target / 100, "fr_upper": fr_upper / 100},
+            g2,
         ]}
 
     @app.callback(
@@ -560,6 +619,14 @@ def register_callbacks(app) -> None:
         show, hide = {"display": "block"}, {"display": "none"}
         return (show if strategy == "volatility_discretionary_scaling" else hide,
                 show if strategy == "funded_ratio_guardrail" else hide)
+
+    @app.callback(
+        Output("block-g2-manual", "style"),
+        Input("chk-g2-manual", "value"),
+    )
+    def toggle_g2_manual_block(manual):
+        """Show the Advanced manual-threshold sliders only when opted in."""
+        return {"display": "block"} if manual else {"display": "none"}
 
     @app.callback(
         Output("store-active-view", "data"),
@@ -814,7 +881,7 @@ def register_callbacks(app) -> None:
         """Callback #17. btn-run ignores playground events; btn-run-playground includes them."""
         events = playground_events if ctx.triggered_id == "btn-run-playground" else []
         try:
-            run_id, figures, summary, badges, guardrail_stats = execute_run(
+            run_id, figures, summary, badges, guardrail_stats, baseline_summary = execute_run(
                 scenario, guardrail_cfg, events, bool(include_historic)
             )
         except Exception as exc:
@@ -828,6 +895,14 @@ def register_callbacks(app) -> None:
             build_chart_card(name, f"graph-historic-{i}", figure=fig)
             for i, (name, fig) in enumerate(figures["historic"])
         ]
+        # The dynamic-spending chart shares div-historic-cards' slot (it exists
+        # only when a funded-ratio guardrail ran, same as historic cards only
+        # exist when requested) — no extra Output needed.
+        if figures["guardrail"] is not None:
+            figures["guardrail"].update_layout(uirevision="results")
+            historic_cards.insert(0, build_chart_card(
+                "Dynamic spending (guardrail)", "graph-guardrail",
+                figure=figures["guardrail"]))
         # Constant uirevision so zoom/pan survives re-runs (matches preview).
         for key in ("cash_flow", "portfolio", "draw"):
             figures[key].update_layout(uirevision="results")
@@ -838,7 +913,7 @@ def register_callbacks(app) -> None:
             f"{1 - ruin:.1%}", {"color": _TONE_COLOR[tone]},
             f"Your plan holds in {n_success:,} of {n_paths:,} simulated futures.",
             f"wash-{tone} p-4 mb-3",
-            _stat_tiles(summary, guardrail_stats), _result_badges(badges), run_id,
+            _stat_tiles(summary, guardrail_stats, baseline_summary), _result_badges(badges), run_id,
             "Simulation complete", True, "success",
         )
 

@@ -316,6 +316,43 @@ def fig_draw(results: Dict) -> go.Figure:
     return fig
 
 
+def fig_guardrail_multiplier(results: Dict) -> go.Figure:
+    """PRD_GOAL_BASED_GUARDRAILS.md §3.5: spending-multiplier percentile bands
+    over time — the feedback loop showing what the guardrail policy actually
+    did to discretionary spending (median line, P10-P90 band, 1.0 = planned
+    level). Reuses the portfolio chart's band styling so the results row reads
+    as one system."""
+    pct = results["guardrail_mult_percentiles"]
+    params = results["params"]
+    factor = 1 if params.annual else 12.0
+    n = len(pct["p50"])
+    ages = (np.arange(n) + params.start_age * factor) / factor
+
+    fig = go.Figure(data=[
+        go.Scatter(
+            x=np.concatenate([ages, ages[::-1]]),
+            y=np.concatenate([pct["p10"], pct["p90"][::-1]]),
+            fill="toself", fillcolor=BAND_25_75_FILL,
+            line=dict(color="rgba(255,255,255,0)"),
+            name="10-90% of futures", hoverinfo="skip",
+        ),
+        go.Scatter(x=ages, y=pct["p90"], name="90th percentile",
+                   line=dict(color=SERIES_PERCENTILE_LINE, width=1)),
+        go.Scatter(x=ages, y=pct["p10"], name="10th percentile",
+                   line=dict(color=SERIES_PERCENTILE_LINE, width=1)),
+        go.Scatter(x=ages, y=pct["p50"], name="Median spending level",
+                   line=dict(color=SERIES_PORTFOLIO_MEDIAN, width=2)),
+    ])
+    fig.add_hline(y=1.0, line_dash="dot", line_color=SERIES_PERCENTILE_LINE,
+                  annotation_text="planned level", annotation_position="bottom right")
+    fig.update_layout(
+        template=PLOTLY_TEMPLATE, height=PANEL_HEIGHT, legend=_PANEL_LEGEND,
+        xaxis_title="Age", yaxis_title="Discretionary spending × plan",
+        yaxis_tickformat=".0%",
+    )
+    return fig
+
+
 def fig_historic(results: Dict, hr: Dict) -> go.Figure:
     """One chart card per historic scenario."""
     params = results["params"]

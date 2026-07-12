@@ -38,7 +38,7 @@ def test_save_then_load_roundtrips(tmp_path):
 def test_run_simulation_returns_figure_and_ruin_badge():
     # item 4: Run Simulation -> per-panel figures + ruin probability (R5:
     # execute_run returns a dict of panel figures, not one monolith figure).
-    run_id, figures, summary, badges, guardrail_stats = execute_run(
+    run_id, figures, summary, badges, guardrail_stats, baseline_summary = execute_run(
         SCENARIO, {"guardrails": []}, [], include_historic=False,
     )
     assert run_id
@@ -46,9 +46,11 @@ def test_run_simulation_returns_figure_and_ruin_badge():
     assert figures["portfolio"] is not None
     assert figures["draw"] is not None
     assert figures["historic"] == []
+    assert figures["guardrail"] is None       # no guardrail -> no spending chart
     assert 0.0 <= summary["ruin_probability"] <= 1.0
     assert badges == []  # no playground events, no guardrails -> baseline run
     assert guardrail_stats is None
+    assert baseline_summary is None
 
 
 def test_saved_scenario_matches_cli_ruin_probability(tmp_path):
@@ -57,7 +59,7 @@ def test_saved_scenario_matches_cli_ruin_probability(tmp_path):
     path = tmp_path / "smoke.xlsx"
     scenario_to_xlsx(SCENARIO, path)
 
-    _, _, web_summary, _, _ = execute_run(SCENARIO, {"guardrails": []}, [], include_historic=False)
+    _, _, web_summary, _, _, _ = execute_run(SCENARIO, {"guardrails": []}, [], include_historic=False)
 
     cli_params = SimulationParams.from_legacy_scenario_data(read_scenario_data(path))
     cli_result = run_simulation(cli_params)
