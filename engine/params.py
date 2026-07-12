@@ -77,7 +77,8 @@ class SimulationParams:
         """Build from the scenario JSON (PRD §4.1). Converts monthly->annual
         (x12), resolves market mu/sigma from engine.markets, and appends
         playground events as Lumps (category 'strict', never scaled by
-        guardrails)."""
+        guardrails, and — as unplanned what-if shocks — excluded from the
+        funded-ratio guardrail's PV lookahead; see run_simulation)."""
         portfolio = scenario["portfolio"]
         market = MARKETS[portfolio["market"]]
 

@@ -4,7 +4,8 @@ from typing import Dict, Optional
 
 import numpy as np
 
-from engine.guardrails import CATEGORIES, build_handlers, compute_guardrail_stats, precompute_pv
+from engine.guardrails import (CATEGORIES, build_handlers, calibrate_wealth_needed,
+                               compute_guardrail_stats, precompute_pv)
 from engine.params import SimulationParams, aggregate_schedule
 
 
@@ -78,14 +79,28 @@ def run_simulation(params: SimulationParams, guardrails: Optional[list] = None) 
 
     lump_out_by_cat = {cat: np.zeros(n_periods) for cat in CATEGORIES}
     lump_in = np.zeros(n_periods)
+    # Playground events are UNPLANNED what-if shocks: they hit the portfolio when
+    # they occur (via strict_out/lump_in below) but must NOT be part of the
+    # funded-ratio plan (neither the liability nor the income side), so the
+    # guardrail reacts to them as shocks (funded ratio drops -> future cuts)
+    # rather than pre-reserving for them. Track their out/inflows separately to
+    # strip them back out of the PV lookahead. Playground lumps are always
+    # category "strict" (see params.from_scenario), so strict_out/lump_in are
+    # the only PV inputs they can leak into.
+    playground_out = np.zeros(n_periods)
+    playground_in = np.zeros(n_periods)
     for lump in params.lumps:
         key = lump.age if params.annual else lump.age * 12
         idx = int(key) - int(periods[0])
         if 0 <= idx < n_periods:
             if lump.amount < 0:
                 lump_out_by_cat[lump.category][idx] += -lump.amount
+                if lump.playground:
+                    playground_out[idx] += -lump.amount
             else:
                 lump_in[idx] += lump.amount
+                if lump.playground:
+                    playground_in[idx] += lump.amount
 
     # Discretionary outflow split into two independently-scalable buckets
     # (PRD Stage 4 / source doc §9-11): `lifestyle` (recurring discretionary,
@@ -100,17 +115,24 @@ def run_simulation(params: SimulationParams, guardrails: Optional[list] = None) 
     strict_out = spend_by_cat["strict"] + lump_out_by_cat["strict"]
 
     # Funded-ratio guardrail lookahead (PRD §3.3): PV of remaining committed
-    # net outflow and of each discretionary bucket, discounted at the plan's
-    # real discount rate. Built here — after the per-category outflow/inflow
-    # arrays exist — and handed to build_handlers as fixed context. rent_by_period
-    # duplicates the loop's inline per-period rent sum deliberately (cheap
-    # O(T x n_properties) prepass) so the proven inline loop math is untouched.
+    # outflow, of remaining planned income, and of each discretionary bucket,
+    # discounted at the plan's real discount rate. Income is kept on the ASSET
+    # side of the funded ratio (assets = bal + pv_income) rather than netted
+    # into the liability: netting makes the denominator go negative/near-zero
+    # for income-rich plans, exploding the ratio and disabling both guardrails.
+    # Built here — after the per-category outflow/inflow arrays exist — and
+    # handed to build_handlers as fixed context. rent_by_period duplicates the
+    # loop's inline per-period rent sum deliberately (cheap O(T x n_properties)
+    # prepass) so the proven inline loop math is untouched.
     rent_by_period = np.array([
         sum(p.rent_annual / factor for p in params.properties
             if period >= (p.start_age if params.annual else p.start_age * 12))
         for period in periods
     ])
-    committed_net = strict_out - incomes - rent_by_period - lump_in
+    # Playground out/inflows are excluded from BOTH sides so unplanned what-if
+    # events stay out of the plan (they still hit the portfolio in the loop).
+    committed_out = strict_out - playground_out
+    planned_income = incomes + rent_by_period + lump_in - playground_in
     # Discount per PERIOD: precompute_pv exponentiates by the period index, so in
     # monthly mode the rate must be the monthly-equivalent of the annual real
     # discount rate (same conversion the portfolio return mean/sd get below).
@@ -118,12 +140,44 @@ def run_simulation(params: SimulationParams, guardrails: Optional[list] = None) 
     if not params.annual:
         dr = (1 + dr) ** (1 / 12) - 1
     pv_context = {
-        "pv_committed": precompute_pv(committed_net, dr),
+        "pv_committed": precompute_pv(committed_out, dr),
+        "pv_income": precompute_pv(planned_income, dr),
         "pv_lifestyle": precompute_pv(lifestyle_out, dr),
         "pv_optional": precompute_pv(gifts_out, dr),
         "lifestyle_out": lifestyle_out,
         "gifts_out": gifts_out,
     }
+
+    # Confidence mode (PRD_GOAL_BASED_GUARDRAILS.md §2.2): derive per-year
+    # funded-ratio thresholds from a same-seed baseline pass — "wealth needed at
+    # age t for p% success", converted to ratio form. Recursion depth is exactly
+    # one: the inner call passes guardrails=None.
+    baseline_summary = None
+    needed_confidences = sorted({
+        c for g in (guardrails or []) if g.options.get("mode") == "confidence"
+        for c in (g.options.get("c_cut"), g.options.get("c_target"),
+                  g.options.get("c_raise"), g.options.get("c_severe"))
+        if c is not None
+    })
+    if needed_confidences:
+        base = run_simulation(params, guardrails=None)
+        # Guardrails read the START-of-period balance; bal_over_time records the
+        # post-return END-of-period balance, so shift by one (t=0 is the initial
+        # portfolio, identical across paths).
+        start_bal = np.vstack([np.full((1, params.n_paths), params.initial_portfolio),
+                               base["bal_over_time"][:-1]])
+        W = calibrate_wealth_needed(start_bal, ~base["ruined"], tuple(needed_confidences))
+        pv_need_base = np.maximum(
+            pv_context["pv_committed"] + pv_context["pv_lifestyle"] + pv_context["pv_optional"],
+            1.0)
+        # Epsilon floor: a 0.0 threshold (every path succeeds) would put a zero
+        # into the target-multiplier denominator via fr_target.
+        pv_context["fr_by_confidence"] = {
+            p: np.maximum((W[p] + pv_context["pv_income"]) / pv_need_base, 1e-9)
+            for p in needed_confidences
+        }
+        baseline_summary = base["summary"]
+
     handlers = build_handlers(guardrails, pv_context)
 
     bal_over_time = np.full((n_periods, params.n_paths), 0.0)
@@ -220,8 +274,21 @@ def run_simulation(params: SimulationParams, guardrails: Optional[list] = None) 
             "portfolio_sequence": bal_over_time[:, idx].tolist(),
         })
 
+    # Spending-multiplier percentile bands for the report UI (PRD_GOAL_BASED_
+    # GUARDRAILS.md §3.5): only funded-ratio handlers record mult_history.
+    mult_percentiles = None
+    if handlers and getattr(handlers[0], "mult_history", None):
+        hist = np.stack(handlers[0].mult_history, axis=0)   # (T, n_paths)
+        mult_percentiles = {
+            "p10": np.percentile(hist, 10, axis=1),
+            "p50": np.percentile(hist, 50, axis=1),
+            "p90": np.percentile(hist, 90, axis=1),
+        }
+
     return {
         "summary": _summary_percentiles(bal, prop_tot, estate, ruined),
+        "baseline_summary": baseline_summary,  # set when a calibration pass ran
+        "guardrail_mult_percentiles": mult_percentiles,
         "guardrail_stats": compute_guardrail_stats(handlers),
         "final_portfolio": bal,
         "final_property": prop_tot,

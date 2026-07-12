@@ -37,9 +37,15 @@ def make_params(**over):
     return SimulationParams(**base)
 
 
-def _handler(pv_committed, pv_lifestyle, pv_optional, lifestyle_out, gifts_out, **opts):
+def _handler(pv_committed, pv_lifestyle, pv_optional, lifestyle_out, gifts_out,
+             pv_income=None, **opts):
+    """pv_income defaults to zeros: assets == bal, so hand-computed expected
+    values below stay exact."""
+    if pv_income is None:
+        pv_income = np.zeros(len(np.atleast_1d(pv_committed)))
     ctx = {k: np.asarray(v, dtype=float) for k, v in dict(
-        pv_committed=pv_committed, pv_lifestyle=pv_lifestyle, pv_optional=pv_optional,
+        pv_committed=pv_committed, pv_income=pv_income,
+        pv_lifestyle=pv_lifestyle, pv_optional=pv_optional,
         lifestyle_out=lifestyle_out, gifts_out=gifts_out).items()}
     return FundedRatioGuardrail({**G2_DEFAULTS, **opts}, ctx)
 
@@ -184,6 +190,47 @@ def test_g2_runs_on_example_scenario_and_reports_stats():
     assert stats["type"] == "funded_ratio_guardrail"
     assert 0.0 <= stats["frac_paths_triggered"] <= 1.0
     assert 0.0 <= res["summary"]["ruin_probability"] <= 1.0
+
+
+def test_income_rich_plan_keeps_a_finite_meaningful_funded_ratio():
+    """Asset-side regression (scenario_data_minus_parents bug, 2026-07-09):
+    when planned income exceeds committed spending, liability-netting made the
+    denominator negative -> floored to 1 -> funded ratio in the millions -> the
+    raise leg fired regardless of fr_upper and the cut leg was unreachable.
+    Asset-side: FR = (bal + pv_income)/pv_need stays near 1.x and thresholds
+    discriminate. Here: bal=100, pv_income=5000, needs=1000+1000 -> FR=2.55.
+    Netting would give FR = 100/max(1000-5000+1000, 1) = 100 -> raise even at
+    fr_upper=3. Asset-side must NOT raise at 3.0 and MUST raise at 2.0."""
+    for fr_upper, should_raise in [(3.0, False), (2.0, True)]:
+        h = _handler([1000.0], [1000.0], [0.0], [100.0], [0.0],
+                     pv_income=[5000.0], fr_upper=fr_upper)
+        h.multiplier(0, None, 1, bal=np.array([100.0]))
+        assert bool(h.triggered_up[0]) == should_raise, f"fr_upper={fr_upper}"
+        assert not h.triggered_down[0]
+
+
+def test_playground_events_are_unplanned_shocks_not_reserved_liabilities():
+    """A playground (what-if) event must hit the portfolio like any lump, but
+    NOT be reserved in the funded-ratio PV. So: identical portfolio path to a
+    planned strict lump when there is no guardrail (same cashflow, flag ignored),
+    but a DIFFERENT run under G2 — the planned lump is discounted into pv_committed
+    (funded ratio barely moves when paid) while the playground shock is not
+    (funded ratio drops at the shock, driving future cuts)."""
+    age, amt = 72, -1_000_000
+    planned = make_params(lumps=[Lump(age, amt, "planned repair", "strict")])
+    playgr = make_params(lumps=[Lump(age, amt, "unplanned repair", "strict", playground=True)])
+
+    # Same cashflow: without guardrails the playground flag is invisible.
+    np.testing.assert_array_equal(
+        run_simulation(planned)["bal_over_time"],
+        run_simulation(playgr)["bal_over_time"])
+
+    cfg = [GuardrailConfig(type="funded_ratio_guardrail", options=G2_DEFAULTS)]
+    r_planned = run_simulation(planned, guardrails=cfg)
+    r_playgr = run_simulation(playgr, guardrails=cfg)
+    # With G2 they must diverge — proving the playground shock is kept out of the
+    # PV lookahead (revert the exclusion and these become identical).
+    assert not np.array_equal(r_planned["bal_over_time"], r_playgr["bal_over_time"])
 
 
 def test_g2_monthly_mode_discounts_per_month_and_stays_sane():

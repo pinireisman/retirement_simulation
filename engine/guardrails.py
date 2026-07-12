@@ -53,6 +53,26 @@ class VolatilityDiscretionaryScaling:
         return mult
 
 
+def calibrate_wealth_needed(start_bal: np.ndarray, success: np.ndarray,
+                            confidences: tuple) -> dict:
+    """W[p][t] = smallest start-of-period-t liquid balance such that baseline
+    paths holding at least that balance went on to succeed with frequency >= p
+    (PRD_GOAL_BASED_GUARDRAILS.md §2.1). np.inf where no observed wealth level
+    reaches p (that year always reads 'behind'); 0.0 where even the poorest
+    paths reach p (never 'behind'). Deterministic; estimates assume baseline
+    (unguarded) spending, per the source doc's one-shot calibration method."""
+    T, n = start_bal.shape
+    out = {p: np.zeros(T) for p in confidences}
+    for t in range(T):
+        order = np.argsort(-start_bal[t])              # richest first
+        sorted_bal = start_bal[t][order]
+        frac = np.cumsum(success[order]) / np.arange(1, n + 1)
+        for p in confidences:
+            ok = np.nonzero(frac >= p)[0]
+            out[p][t] = np.inf if ok.size == 0 else sorted_bal[ok[-1]]
+    return out
+
+
 def precompute_pv(cashflows: np.ndarray, discount_rate: float) -> np.ndarray:
     """pv[t] = present value of cashflows[t:], discounted at `discount_rate`."""
     T = len(cashflows)
@@ -64,7 +84,17 @@ def precompute_pv(cashflows: np.ndarray, discount_rate: float) -> np.ndarray:
 
 
 class FundedRatioGuardrail:
-    """funded_ratio = portfolio / PV(remaining committed + discretionary need).
+    """funded_ratio = (portfolio + PV(planned income)) / PV(remaining spending).
+
+    Income sits on the ASSET side (actuarial convention), not netted into the
+    liability. Netting (portfolio / PV(spending - income)) breaks down for
+    income-rich plans: the denominator goes negative/near-zero, the ratio
+    explodes to millions, the raise leg fires for every path regardless of
+    fr_upper, and the cut leg can never fire — the guardrail degenerates into
+    an unconditional spending raise. Asset-side keeps both sides positive and
+    the ratio near 1.x, where the thresholds actually discriminate. The two
+    forms agree at funded_ratio == 1 (assets exactly cover needs), so the
+    0.85 / 1.05 / 1.30 defaults keep their meaning.
 
     Three-bucket model (PRD Stage 4 / source doc §9-11). Two independently-scaled
     discretionary buckets, both already inside the PV lookahead so paying a
@@ -85,12 +115,29 @@ class FundedRatioGuardrail:
     KEY = "funded_ratio_guardrail"
 
     def __init__(self, options: dict, context: dict | None = None):
-        self.fr_lower = options["fr_lower"]
-        self.fr_target = options["fr_target"]
-        self.fr_upper = options["fr_upper"]
-        # Optional-lumpy (gifts) tier: engine-side defaults, not exposed as
-        # sliders (mirrors the MVP choice not to surface every constant).
-        self.fr_severe = options.get("fr_severe", 0.80)
+        T = len(context["pv_committed"])
+
+        def _per_year(x):
+            return np.broadcast_to(np.asarray(x, dtype=float), (T,)).copy()
+
+        if options.get("mode") == "confidence":
+            # Goal-based mode (PRD_GOAL_BASED_GUARDRAILS.md): thresholds are
+            # per-year funded-ratio arrays derived in run_simulation from a
+            # same-seed baseline pass ("wealth needed at age t for p% success").
+            tables = context["fr_by_confidence"]
+            self.fr_lower = tables[options["c_cut"]]
+            self.fr_target = tables[options["c_target"]]
+            self.fr_upper = (tables[options["c_raise"]]
+                             if options.get("c_raise") is not None else np.full(T, np.inf))
+            self.fr_severe = (tables[options["c_severe"]]
+                              if options.get("c_severe") is not None else np.zeros(T))
+        else:
+            # Manual mode — scalar thresholds, broadcast so multiplier() has one
+            # code path. Optional-lumpy (gifts) tier default stays engine-side.
+            self.fr_lower = _per_year(options["fr_lower"])
+            self.fr_target = _per_year(options["fr_target"])
+            self.fr_upper = _per_year(options["fr_upper"])
+            self.fr_severe = _per_year(options.get("fr_severe", 0.80))
         self.adjustment_fraction = options.get("adjustment_fraction", 0.25)
         self.max_cut_per_year = options.get("max_cut_per_year", 0.10)
         # Raise more cautiously than we cut (source doc's lower bound, 5%/yr):
@@ -102,7 +149,8 @@ class FundedRatioGuardrail:
         self.optional_cut_per_year = options.get("optional_cut_per_year", 0.10)
         self.optional_recover_per_year = options.get("optional_recover_per_year", 0.10)
         self.min_optional_multiplier = options.get("min_optional_multiplier", 0.0)
-        self.pv_committed = context["pv_committed"]      # shape (T,)
+        self.pv_committed = context["pv_committed"]      # shape (T,), committed OUTFLOWS only
+        self.pv_income = context["pv_income"]            # shape (T,), planned inflows (asset side)
         self.pv_lifestyle = context["pv_lifestyle"]      # shape (T,)
         self.pv_optional = context["pv_optional"]        # shape (T,)
         self.lifestyle_out = context["lifestyle_out"]    # shape (T,)
@@ -112,6 +160,7 @@ class FundedRatioGuardrail:
         self.triggered_down: Optional[np.ndarray] = None
         self.triggered_up: Optional[np.ndarray] = None
         self.adjustments: list = []
+        self.mult_history: list = []   # per-year effective multipliers (report UI)
 
     def multiplier(self, year_idx: int, port_ret: np.ndarray, n_paths: int, bal=None) -> np.ndarray:
         if self.lifestyle_mult is None:
@@ -124,20 +173,24 @@ class FundedRatioGuardrail:
         pv_life_t = max(self.pv_lifestyle[year_idx], 1.0)
         pv_opt_t = self.pv_optional[year_idx]
 
+        # Assets = liquid portfolio + PV of remaining planned income; needs =
+        # PV of remaining spending, scaled by the current dials. Both positive.
+        assets = bal + self.pv_income[year_idx]
         pv_need = np.maximum(
             pv_committed_t + self.lifestyle_mult * pv_life_t + self.optional_mult * pv_opt_t,
             1.0,
         )
-        funded_ratio = bal / pv_need
+        funded_ratio = assets / pv_need
 
-        cut = funded_ratio < self.fr_lower
-        raise_ = funded_ratio > self.fr_upper
-        severe = funded_ratio < self.fr_severe
+        cut = funded_ratio < self.fr_lower[year_idx]
+        raise_ = funded_ratio > self.fr_upper[year_idx]
+        severe = funded_ratio < self.fr_severe[year_idx]
 
         # Lifestyle dial: solve for the multiplier that hits fr_target given the
         # committed liabilities AND the current optional-lumpy reservation
         # (source doc §9), then move partway there, capped per year.
-        target = (bal / self.fr_target - pv_committed_t - self.optional_mult * pv_opt_t) / pv_life_t
+        target = (assets / self.fr_target[year_idx]
+                  - pv_committed_t - self.optional_mult * pv_opt_t) / pv_life_t
         target = np.clip(target, self.min_multiplier, self.max_multiplier)
         proposed = self.lifestyle_mult + self.adjustment_fraction * (target - self.lifestyle_mult)
         proposed = np.where(cut, np.maximum(proposed, self.lifestyle_mult * (1 - self.max_cut_per_year)), proposed)
@@ -162,8 +215,11 @@ class FundedRatioGuardrail:
         gift_t = self.gifts_out[year_idx]
         disc_t = life_t + gift_t
         if disc_t <= 1e-9:
-            return np.ones(n_paths)
-        return (life_t * self.lifestyle_mult + gift_t * self.optional_mult) / disc_t
+            effective = np.ones(n_paths)
+        else:
+            effective = (life_t * self.lifestyle_mult + gift_t * self.optional_mult) / disc_t
+        self.mult_history.append(effective)
+        return effective
 
 
 GUARDRAIL_REGISTRY: dict = {
@@ -191,13 +247,25 @@ def compute_guardrail_stats(handlers: list) -> Optional[dict]:
         return None
     h = handlers[0]
     adjust = np.stack(h.adjustments, axis=0)
-    return {
+    stats = {
         "type": h.KEY,
         "frac_paths_triggered": float((h.triggered_down | h.triggered_up).mean()),
         "frac_paths_cut": float(h.triggered_down.mean()),
         "frac_paths_raised": float(h.triggered_up.mean()),
         "median_adjustment": float(np.median(adjust[adjust != 0])) if np.any(adjust != 0) else 0.0,
     }
+    if getattr(h, "mult_history", None):
+        # Deepest cut / highest raise each path ever experienced -> report-UI
+        # wording ("worst 5% of futures: cut up to X%" / "median peak +Y%").
+        # The raise side must be shown alongside the confidence delta so a user
+        # who chose upside/balanced sees what the lost confidence bought.
+        hist = np.stack(h.mult_history, axis=0)          # (T, n_paths)
+        deepest = np.min(hist, axis=0)
+        peak = np.max(hist, axis=0)
+        stats["worst5_min_mult"] = float(np.percentile(deepest, 5))
+        stats["median_min_mult"] = float(np.percentile(deepest, 50))
+        stats["median_max_mult"] = float(np.percentile(peak, 50))
+    return stats
 
 
 def parse_guardrail_configs(guardrail_cfg: Optional[dict]) -> list:
