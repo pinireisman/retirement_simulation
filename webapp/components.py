@@ -126,15 +126,21 @@ def build_badge_row(items):
     return badges
 
 
-def build_chart_card(title, graph_id, figure=None):
+def build_chart_card(title, graph_id, figure=None, legend_toggle=False):
     """Build a chart card with title, a maximize button, and the graph."""
     if figure is None:
         figure = go.Figure(layout={"template": PLOTLY_TEMPLATE})
 
+    buttons = []
+    if legend_toggle:
+        buttons.append(dbc.Button("Legend", className="btn-legend-toggle p-0 me-2", color="link",
+                                   size="sm", title="Show / hide legend"))
+    buttons.append(dbc.Button("⤢", className="btn-maximize p-0", color="link", size="sm",
+                               title="Maximize / restore"))
+
     header = html.Div([
         html.H5(title, className="mb-0"),
-        dbc.Button("⤢", className="btn-maximize p-0", color="link", size="sm",
-                   title="Maximize / restore"),
+        html.Div(buttons, className="d-flex align-items-center"),
     ], className="d-flex justify-content-between align-items-center mb-2")
 
     return dbc.Card(

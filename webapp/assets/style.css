@@ -433,3 +433,9 @@ body {
   line-height: 1;
   text-decoration: none;
 }
+.btn-legend-toggle {
+  cursor: pointer;
+  font-size: .8rem;
+  line-height: 1;
+  text-decoration: none;
+}

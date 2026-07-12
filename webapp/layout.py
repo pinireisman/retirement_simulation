@@ -136,7 +136,8 @@ def build_layout():
 
             html.Div([
                 dbc.Row([
-                    dbc.Col(build_chart_card("Cash flow", "graph-results", figure=_EMPTY_FIGURE), width=6),
+                    dbc.Col(build_chart_card("Cash flow", "graph-results", figure=_EMPTY_FIGURE,
+                                              legend_toggle=True), width=6),
                     dbc.Col(build_chart_card("Portfolio & property", "graph-portfolio"), width=6),
                 ], className="g-3 mb-3"),
                 dbc.Row([

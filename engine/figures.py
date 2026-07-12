@@ -276,8 +276,9 @@ def fig_cash_flow(results: Dict) -> go.Figure:
     fig = go.Figure(data=_cash_flow_bar_traces(ages_for_plotting, series, colors)
                      + [_net_cash_flow_trace(ages_for_plotting, net)])
     fig.update_layout(
-        template=PLOTLY_TEMPLATE, barmode="relative", height=_cash_flow_panel_height(len(series) + 1),
+        template=PLOTLY_TEMPLATE, barmode="relative", height=PANEL_HEIGHT, showlegend=False,
         legend=_PANEL_LEGEND, xaxis_title="Age", yaxis_title="₪ / year (real)",
+        meta={"legendHeight": _cash_flow_panel_height(len(series) + 1)},
     )
     return fig
 

@@ -43,6 +43,7 @@ def test_run_simulation_returns_figure_and_ruin_badge():
     )
     assert run_id
     assert figures["cash_flow"] is not None
+    assert figures["cash_flow"].layout.showlegend is False  # legend hidden by default, toggled via UI button
     assert figures["portfolio"] is not None
     assert figures["draw"] is not None
     assert figures["historic"] == []
