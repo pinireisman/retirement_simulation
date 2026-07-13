@@ -17,6 +17,7 @@ IMPORTANT — hydrate_tabs / collect_edits round-trip:
 from __future__ import annotations
 
 import base64
+import dataclasses
 import json
 import os
 import re
@@ -33,6 +34,7 @@ from engine.figures import (
     PLAYGROUND_COLOR, build_cash_flow_series, net_cash_flow,
     fig_cash_flow, fig_portfolio, fig_draw, fig_guardrail_multiplier, fig_historic, get_ruin_explanation,
     fig_return_distribution,
+    fig_bucket_balances, fig_funding_source, fig_strategy_events, fig_terminal_comparison,
 )
 from engine.guardrails import parse_guardrail_configs
 from engine.historic_returns import historical_stress_real_factors_70_30
@@ -157,7 +159,7 @@ def _result_badges(badges: list[str]):
 
 
 def _stat_tiles(summary: dict, guardrail_stats: dict | None = None,
-                baseline_summary: dict | None = None):
+                baseline_summary: dict | None = None, two_bucket_stats: dict | None = None):
     tiles = [
         build_stat_tile("Median portfolio", f"₪{summary['portfolio_median']:,.0f}"),
         build_stat_tile("Median property", f"₪{summary['property_median']:,.0f}"),
@@ -200,20 +202,56 @@ def _stat_tiles(summary: dict, guardrail_stats: dict | None = None,
                 f"median future: spending raised up to +{peak:.0%} "
                 f"({guardrail_stats['frac_paths_raised']:.0%} of futures raised)",
             ))
+    if two_bucket_stats is not None:
+        tiles.append(build_stat_tile(
+            "Reserve depletion (peak)",
+            f"{two_bucket_stats['reserve_depletion_probability']:.0%} of paths",
+        ))
+        tiles.append(build_stat_tile(
+            "Forced sale ever occurs",
+            f"{two_bucket_stats['forced_sale_probability']:.0%} of paths",
+        ))
+        tiles.append(build_stat_tile(
+            "Median refills over retirement",
+            f"{two_bucket_stats['median_refills']:.0f}",
+        ))
     return dbc.Row([dbc.Col(t, width=3) for t in tiles], className="g-2 mb-3")
 
 
+def build_comparison(results: dict, comp: dict) -> dict:
+    """Compact extract of a single-portfolio comparator run, for overlaying
+    against a two-bucket result (PRD §11). Stores only the comparator's
+    summary/guardrail stats and p10/p50/p90 of its bal_over_time — never the
+    full (n_periods x n_paths) array.
+    """
+    return {
+        "summary": comp["summary"],
+        "guardrail_stats": comp["guardrail_stats"],
+        "bal_percentiles": {
+            "p10": np.percentile(comp["bal_over_time"], 10, axis=1),
+            "p50": np.percentile(comp["bal_over_time"], 50, axis=1),
+            "p90": np.percentile(comp["bal_over_time"], 90, axis=1),
+        },
+    }
+
+
 def execute_run(scenario: dict, guardrail_cfg: dict, playground_events: list[dict],
-                 include_historic: bool):
+                 include_historic: bool, compare_enabled: bool = True):
     """PRD §5.1 shared run contract."""
     # Validate the scenario before proceeding
     errors = validate_scenario(scenario)
     if errors:
         raise ValueError("; ".join(errors))
-    
+
     params = SimulationParams.from_scenario(scenario, playground_events)
     guardrails = parse_guardrail_configs(guardrail_cfg)
     results = run_simulation(params, guardrails=guardrails)
+
+    if (compare_enabled and params.withdrawal_strategy is not None
+            and params.withdrawal_strategy.type == "two_bucket"):
+        comp_params = dataclasses.replace(params, withdrawal_strategy=None)
+        comp = run_simulation(comp_params, guardrails=guardrails)
+        results["comparison"] = build_comparison(results, comp)
 
     badges = []
     if playground_events:
@@ -230,6 +268,16 @@ def execute_run(scenario: dict, guardrail_cfg: dict, playground_events: list[dic
             r["end_age"] = int(seq["years"][-1])
             historic_figs.append((r["name"], fig_historic(results, r)))
 
+    two_bucket_figs = []
+    if params.withdrawal_strategy is not None and params.withdrawal_strategy.type == "two_bucket":
+        two_bucket_figs = [
+            ("Growth vs. reserve balance", fig_bucket_balances(results)),
+            ("Funding source by age", fig_funding_source(results)),
+            ("Strategy events", fig_strategy_events(results)),
+        ]
+        if "comparison" in results:
+            two_bucket_figs.append(("Terminal balance vs. single portfolio", fig_terminal_comparison(results)))
+
     figures = {
         "cash_flow": fig_cash_flow(results),
         "portfolio": fig_portfolio(results),
@@ -237,6 +285,7 @@ def execute_run(scenario: dict, guardrail_cfg: dict, playground_events: list[dic
         "historic": historic_figs,
         "guardrail": (fig_guardrail_multiplier(results)
                       if results.get("guardrail_mult_percentiles") else None),
+        "two_bucket": two_bucket_figs,
     }
 
     run_id = str(uuid.uuid4())
@@ -266,6 +315,19 @@ def register_callbacks(app) -> None:
         Output("tbl-lumps", "data"),
         Output("tbl-properties", "data"),
         Output("header-scenario-name", "children"),
+        Output("radio-withdrawal-strategy", "value"),
+        Output("slider-wd-target-years", "value"),
+        Output("slider-wd-trigger-years", "value"),
+        Output("dd-wd-coverage-scope", "value"),
+        Output("dd-wd-distribution", "value"),
+        Output("inp-wd-mean-real", "value"),
+        Output("inp-wd-std-real", "value"),
+        Output("inp-wd-df", "value"),
+        Output("inp-wd-draw-threshold", "value"),
+        Output("dd-wd-first-period-source", "value"),
+        Output("dd-wd-refill-eligibility", "value"),
+        Output("inp-wd-refill-threshold", "value"),
+        Output("dd-wd-refill-amount-rule", "value"),
         Output("store-hydrate-guard", "data"),
         Input("store-scenario", "data"),
         State("store-hydrate-guard", "data"),
@@ -280,7 +342,7 @@ def register_callbacks(app) -> None:
         something else dirtied the store, e.g. a second Load click)."""
         snapshot = json.dumps(scenario, sort_keys=True)
         if snapshot == last_hydrated:
-            return (no_update,) * 17
+            return (no_update,) * 30
 
         portfolio = scenario["portfolio"]
         name = scenario.get("name", "untitled")
@@ -296,6 +358,15 @@ def register_callbacks(app) -> None:
             mu_val = MARKETS[market]["mu"]
         if sigma_val is None:
             sigma_val = MARKETS[market]["sigma"]
+
+        # Withdrawal strategy block -> widgets (defaults mirror the dataclass
+        # defaults in engine/withdrawal_strategies.py so an absent block
+        # renders exactly like a freshly-added single-portfolio one).
+        ws = scenario.get("withdrawal_strategy") or {}
+        ws_reserve = ws.get("reserve") or {}
+        ws_rm = ws_reserve.get("return_model") or {}
+        ws_draw = ws.get("draw_policy") or {}
+        ws_refill = ws.get("refill_policy") or {}
 
         return (
             portfolio["initial_portfolio"],
@@ -314,6 +385,19 @@ def register_callbacks(app) -> None:
             scenario.get("lumps", []),
             scenario.get("properties", []),
             header,
+            ws.get("type", "single_portfolio"),
+            ws_reserve.get("target_years", 4.0),
+            ws_reserve.get("refill_trigger_years", 3.0),
+            ws_reserve.get("coverage_scope", "recurring_gap_only"),
+            ws_rm.get("distribution", "normal"),
+            round(ws_rm.get("mean_real", 0.0) * 100, 4),
+            round(ws_rm.get("std_real", 0.0) * 100, 4),
+            ws_rm.get("student_t_df"),
+            round(ws_draw.get("growth_return_threshold_real", 0.0) * 100, 4),
+            ws_draw.get("first_period_source", "reserve"),
+            ws_refill.get("eligibility_rule", "growth_return_at_or_above_threshold"),
+            round(ws_refill.get("growth_return_threshold_real", 0.0) * 100, 4),
+            ws_refill.get("amount_rule", "to_target"),
             snapshot,
         )
 
@@ -345,14 +429,30 @@ def register_callbacks(app) -> None:
         Input("btn-add-lumps", "n_clicks"),
         Input("btn-add-properties", "n_clicks"),
         Input("slider-g2-discount", "value"),
+        Input("radio-withdrawal-strategy", "value"),
+        Input("slider-wd-target-years", "value"),
+        Input("slider-wd-trigger-years", "value"),
+        Input("dd-wd-coverage-scope", "value"),
+        Input("dd-wd-distribution", "value"),
+        Input("inp-wd-mean-real", "value"),
+        Input("inp-wd-std-real", "value"),
+        Input("inp-wd-df", "value"),
+        Input("inp-wd-draw-threshold", "value"),
+        Input("dd-wd-first-period-source", "value"),
+        Input("dd-wd-refill-eligibility", "value"),
+        Input("inp-wd-refill-threshold", "value"),
+        Input("dd-wd-refill-amount-rule", "value"),
         State("store-scenario", "data"),
         State("store-undo-stack", "data"),
         prevent_initial_call=True,
     )
     def collect_edits(initial_portfolio, start_age, end_age, market, fat_tails, df,
                        mode, n_paths, seed, mu, sigma, spending_rows, income_rows, lumps_rows,
-                       properties_rows, _n_sp, _n_inc, _n_lp, _n_pr, discount, prev_scenario,
-                       undo_stack):
+                       properties_rows, _n_sp, _n_inc, _n_lp, _n_pr, discount,
+                       wd_type, wd_target_years, wd_trigger_years, wd_coverage_scope,
+                       wd_distribution, wd_mean_real, wd_std_real, wd_df, wd_draw_threshold,
+                       wd_first_period_source, wd_refill_eligibility, wd_refill_threshold,
+                       wd_refill_amount_rule, prev_scenario, undo_stack):
         """Widgets -> store. On an add-row button click, appends a default
         row to that band's table before serializing everything back out."""
         triggered = ctx.triggered_id
@@ -382,9 +482,34 @@ def register_callbacks(app) -> None:
         mu_val = _num(mu, float) if mu not in (None, "") else None
         sigma_val = _num(sigma, float) if sigma not in (None, "") else None
 
+        withdrawal_strategy = {
+            "type": wd_type or "single_portfolio",
+            "reserve": {
+                "target_years": _num(wd_target_years, float, 4.0),
+                "refill_trigger_years": _num(wd_trigger_years, float, 3.0),
+                "coverage_scope": wd_coverage_scope or "recurring_gap_only",
+                "return_model": {
+                    "distribution": wd_distribution or "normal",
+                    "mean_real": _num(wd_mean_real, float, 0) / 100,
+                    "std_real": _num(wd_std_real, float, 0) / 100,
+                    "student_t_df": _num(wd_df, float, None) if wd_df not in (None, "") else None,
+                },
+            },
+            "draw_policy": {
+                "growth_return_threshold_real": _num(wd_draw_threshold, float, 0) / 100,
+                "first_period_source": wd_first_period_source or "reserve",
+            },
+            "refill_policy": {
+                "eligibility_rule": wd_refill_eligibility or "growth_return_at_or_above_threshold",
+                "growth_return_threshold_real": _num(wd_refill_threshold, float, 0) / 100,
+                "amount_rule": wd_refill_amount_rule or "to_target",
+            },
+        }
+
         scenario = {
             "$schema": prev_scenario.get("$schema", "scenario.v1"),
             "name": prev_scenario.get("name", "untitled"),
+            "withdrawal_strategy": withdrawal_strategy,
             "portfolio": {
                 "initial_portfolio": _num(initial_portfolio, float, 0),
                 "start_age": start_age_i,
@@ -599,6 +724,30 @@ def register_callbacks(app) -> None:
     def toggle_guardrail_panel(n_clicks, is_open):
         """Callback #16."""
         return not is_open
+
+    @app.callback(
+        Output("collapse-withdrawal-strategy", "is_open"),
+        Input("btn-withdrawal-strategy-header", "n_clicks"),
+        State("collapse-withdrawal-strategy", "is_open"),
+        prevent_initial_call=True,
+    )
+    def toggle_withdrawal_strategy_panel(n_clicks, is_open):
+        return not is_open
+
+    @app.callback(
+        Output("div-two-bucket-cards", "style"),
+        Input("radio-withdrawal-strategy", "value"),
+    )
+    def toggle_two_bucket_cards(wd_type):
+        return {"display": "block"} if wd_type == "two_bucket" else {"display": "none"}
+
+    @app.callback(
+        Output("div-wd-df-block", "style"),
+        Input("dd-wd-distribution", "value"),
+    )
+    def toggle_wd_df_block(distribution):
+        """Show the student-t degrees-of-freedom field only for that distribution."""
+        return {"display": "block"} if distribution == "student_t" else {"display": "none"}
 
     @app.callback(
         Output("block-g2-manual", "style"),
@@ -855,14 +1004,16 @@ def register_callbacks(app) -> None:
         State("store-playground", "data"),
         State("store-guardrails", "data"),
         State("switch-historic", "value"),
+        State("switch-compare-enabled", "value"),
         prevent_initial_call=True,
     )
-    def run_simulation_cb(n_run, n_run_pg, scenario, playground_events, guardrail_cfg, include_historic):
+    def run_simulation_cb(n_run, n_run_pg, scenario, playground_events, guardrail_cfg,
+                           include_historic, compare_enabled):
         """Callback #17. btn-run ignores playground events; btn-run-playground includes them."""
         events = playground_events if ctx.triggered_id == "btn-run-playground" else []
         try:
             run_id, figures, summary, badges, guardrail_stats, baseline_summary = execute_run(
-                scenario, guardrail_cfg, events, bool(include_historic)
+                scenario, guardrail_cfg, events, bool(include_historic), bool(compare_enabled)
             )
         except Exception as exc:
             return (no_update,) * 13 + (f"Error running simulation: {exc}", True, "danger")
@@ -875,9 +1026,20 @@ def register_callbacks(app) -> None:
             build_chart_card(name, f"graph-historic-{i}", figure=fig)
             for i, (name, fig) in enumerate(figures["historic"])
         ]
-        # The dynamic-spending chart shares div-historic-cards' slot (it exists
-        # only when a funded-ratio guardrail ran, same as historic cards only
-        # exist when requested) — no extra Output needed.
+        # The two-bucket and guardrail charts share div-historic-cards' slot —
+        # they exist only when the run actually used that feature, same as
+        # historic cards only exist when requested — no extra Output needed.
+        two_bucket_stats = None
+        if figures["two_bucket"]:
+            results = RESULTS_CACHE[run_id]
+            two_bucket_stats = {
+                "reserve_depletion_probability": float(np.max(results["reserve_depletion_probability_by_period"])),
+                "forced_sale_probability": float(np.mean(results["forced_sale_count_per_path"] > 0)),
+                "median_refills": float(np.median(results["refill_count_per_path"])),
+            }
+            for i, (name, fig) in enumerate(figures["two_bucket"]):
+                fig.update_layout(uirevision="results")
+                historic_cards.insert(i, build_chart_card(name, f"graph-two-bucket-{i}", figure=fig))
         if figures["guardrail"] is not None:
             figures["guardrail"].update_layout(uirevision="results")
             historic_cards.insert(0, build_chart_card(
@@ -893,7 +1055,7 @@ def register_callbacks(app) -> None:
             f"{1 - ruin:.1%}", {"color": _TONE_COLOR[tone]},
             f"Your plan holds in {n_success:,} of {n_paths:,} simulated futures.",
             f"wash-{tone} p-4 mb-3",
-            _stat_tiles(summary, guardrail_stats, baseline_summary), _result_badges(badges), run_id,
+            _stat_tiles(summary, guardrail_stats, baseline_summary, two_bucket_stats), _result_badges(badges), run_id,
             "Simulation complete", True, "success",
         )
 

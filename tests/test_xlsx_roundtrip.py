@@ -30,7 +30,8 @@ def test_roundtrip():
             "n_paths": 500,
             "random_seed": 7,
             "mu": None,
-            "sigma": None
+            "sigma": None,
+            "real_discount_rate": 0.015
         },
         "spending_bands": [
             {

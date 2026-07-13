@@ -8,6 +8,11 @@ import pandas as pd
 from openpyxl import Workbook
 
 from engine.markets import MARKETS
+from engine.withdrawal_strategies import (
+    WithdrawalStrategyConfig,
+    parse_withdrawal_strategy,
+    validate_withdrawal_strategy_block,
+)
 
 
 @dataclass
@@ -64,6 +69,7 @@ class SimulationParams:
     lumps: List[Lump] = field(default_factory=list)
     properties: List[Property] = field(default_factory=list)
     scenario_name: str = ""          # replaces the input_file hack in figures
+    withdrawal_strategy: Optional[WithdrawalStrategyConfig] = None  # None ≡ single portfolio (PRD §7.2)
 
     def spending_fn(self) -> Callable[[int], float]:
         return aggregate_schedule(self.spending_bands)
@@ -125,6 +131,7 @@ class SimulationParams:
             lumps=lumps,
             properties=properties,
             scenario_name=scenario.get("name", ""),
+            withdrawal_strategy=parse_withdrawal_strategy(scenario.get("withdrawal_strategy")),
         )
 
     @classmethod
@@ -223,7 +230,10 @@ def validate_scenario(scenario: dict) -> list[str]:
             errors.append(f"Income band {i+1} has age_from > age_to: "
                           f"{band['age_from']} > {band['age_to']}. "
                           f"Field name: age_from")
-    
+
+    # Two-bucket withdrawal strategy block (PRD §7.3)
+    errors.extend(validate_withdrawal_strategy_block(scenario.get("withdrawal_strategy")))
+
     return errors
 
 
@@ -232,7 +242,30 @@ def scenario_to_xlsx(scenario: dict, path) -> None:
     
     # Extract portfolio data
     portfolio = scenario["portfolio"]
-    
+
+    # Two-bucket withdrawal strategy → flat row-0 scalar columns (PRD §13).
+    # Absent block ⇒ all values None (columns empty ⇒ loader omits the block).
+    _ws = scenario.get("withdrawal_strategy") or {}
+    _ws_reserve = _ws.get("reserve") or {}
+    _ws_rm = _ws_reserve.get("return_model") or {}
+    _ws_draw = _ws.get("draw_policy") or {}
+    _ws_refill = _ws.get("refill_policy") or {}
+    _ws_cols = {
+        "withdrawal_strategy_type": _ws.get("type"),
+        "reserve_target_years": _ws_reserve.get("target_years"),
+        "reserve_trigger_years": _ws_reserve.get("refill_trigger_years"),
+        "reserve_coverage_scope": _ws_reserve.get("coverage_scope"),
+        "reserve_return_distribution": _ws_rm.get("distribution"),
+        "reserve_return_mean": _ws_rm.get("mean_real"),
+        "reserve_return_std": _ws_rm.get("std_real"),
+        "reserve_return_df": _ws_rm.get("student_t_df"),
+        "draw_market_threshold": _ws_draw.get("growth_return_threshold_real"),
+        "draw_first_period_source": _ws_draw.get("first_period_source"),
+        "refill_eligibility": _ws_refill.get("eligibility_rule"),
+        "refill_threshold": _ws_refill.get("growth_return_threshold_real"),
+        "refill_amount_rule": _ws_refill.get("amount_rule"),
+    }
+
     # Build column groups with proper padding to make all lists same length
     spending_rows = []
     income_rows = []
@@ -334,6 +367,7 @@ def scenario_to_xlsx(scenario: dict, path) -> None:
             "real_discount_rate": portfolio.get("real_discount_rate") if i == 0 else None,
             "n_paths": portfolio["n_paths"] if i == 0 else None,
             "random_seed": portfolio["random_seed"] if i == 0 else None,
+            **{col: (val if i == 0 else None) for col, val in _ws_cols.items()},
             "spending_age_from": spending_data[i]["spending_age_from"] if i < len(spending_data) else None,
             "spending_age_to": spending_data[i]["spending_age_to"] if i < len(spending_data) else None,
             "spending_amount_monthly": spending_data[i]["spending_amount_monthly"] if i < len(spending_data) else None,
@@ -492,7 +526,52 @@ def _scenario_from_df(df) -> dict:
             "rent_monthly": float(row["properties_rent_monthly"]),  # already monthly, no conversion
             "label": label
         })
-    
+
+    # Two-bucket withdrawal strategy from flat row-0 columns (PRD §13).
+    # Missing/empty type column ⇒ no block at all (old workbooks load as
+    # single portfolio). NaN sub-values are omitted so parsing fills defaults.
+    if "withdrawal_strategy_type" in df.columns and pd.notna(df.iloc[0]["withdrawal_strategy_type"]):
+        r0 = df.iloc[0]
+
+        def _cell(col, cast):
+            if col in df.columns and pd.notna(r0[col]):
+                return cast(r0[col])
+            return None
+
+        def _sub(mapping):
+            return {k: v for k, v in mapping.items() if v is not None}
+
+        ws_block = {"type": str(r0["withdrawal_strategy_type"])}
+        reserve = _sub({
+            "target_years": _cell("reserve_target_years", float),
+            "refill_trigger_years": _cell("reserve_trigger_years", float),
+            "coverage_scope": _cell("reserve_coverage_scope", str),
+        })
+        return_model = _sub({
+            "distribution": _cell("reserve_return_distribution", str),
+            "mean_real": _cell("reserve_return_mean", float),
+            "std_real": _cell("reserve_return_std", float),
+            "student_t_df": _cell("reserve_return_df", float),
+        })
+        if return_model:
+            reserve["return_model"] = return_model
+        if reserve:
+            ws_block["reserve"] = reserve
+        draw_policy = _sub({
+            "growth_return_threshold_real": _cell("draw_market_threshold", float),
+            "first_period_source": _cell("draw_first_period_source", str),
+        })
+        if draw_policy:
+            ws_block["draw_policy"] = draw_policy
+        refill_policy = _sub({
+            "eligibility_rule": _cell("refill_eligibility", str),
+            "growth_return_threshold_real": _cell("refill_threshold", float),
+            "amount_rule": _cell("refill_amount_rule", str),
+        })
+        if refill_policy:
+            ws_block["refill_policy"] = refill_policy
+        scenario["withdrawal_strategy"] = ws_block
+
     return scenario
 
 

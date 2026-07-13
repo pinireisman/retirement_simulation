@@ -73,6 +73,19 @@ SERIES_POSITIVE_LUMP = "rgba(31,41,51,.45)"  # neutral ink-grey for inflow lumps
 HISTORIC_BOUNDARY_LINE = "rgba(31,41,51,.35)"
 HISTORIC_BOUNDARY_FILL = "rgba(31,41,51,.06)"
 
+# Two-bucket withdrawal strategy (PRD two_bucket_retirement_strategy §12.4)
+SERIES_GROWTH_MEDIAN = PRIMARY
+SERIES_RESERVE_MEDIAN = "#00897B"       # teal — distinct hue from growth's blue and property's magenta
+SERIES_RESERVE_TARGET = "rgba(0,137,123,.55)"
+BAND_GROWTH_FILL = "rgba(57,73,171,.15)"     # same alpha family as BAND_25_75_FILL
+BAND_RESERVE_FILL = "rgba(0,137,123,.15)"
+SERIES_FUNDED_FROM_RESERVE = "#00897B"
+SERIES_FUNDED_FROM_GROWTH = PRIMARY
+SERIES_REFILL_PROB = SUCCESS
+SERIES_FORCED_SALE_PROB = DANGER
+SERIES_RESERVE_DEPLETION_PROB = WARNING
+SERIES_COMPARATOR = "rgba(31,41,51,.55)"     # neutral ink-grey — "the old way", never a bucket color
+
 
 def _shade(hex_color: str, index: int, dark: bool = False) -> str:
     """Shade a hex color per index, so multiple bands of the same category
@@ -126,6 +139,10 @@ _DARK_STATIC = {
     SERIES_DRAW_NEUTRAL: "rgba(231,233,238,.18)",
     SERIES_POSITIVE_LUMP: "rgba(231,233,238,.55)",
     INK_2: "rgba(231,233,238,.75)",         # net cash flow / total estate
+    SERIES_RESERVE_MEDIAN: "#4DB6AC",
+    SERIES_RESERVE_TARGET: "rgba(77,182,172,.55)",
+    BAND_RESERVE_FILL: "rgba(77,182,172,.22)",
+    SERIES_COMPARATOR: "rgba(231,233,238,.55)",
 }
 
 

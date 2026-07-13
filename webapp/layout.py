@@ -94,6 +94,12 @@ def build_layout():
                             dbc.Switch(id="switch-guardrails-enabled", label="Enable spending guardrails", value=False),
                             className="mt-2",
                         ),
+                        html.Div(
+                            dbc.Switch(id="switch-compare-enabled",
+                                       label="Compare two-bucket strategy to single portfolio",
+                                       value=True),
+                            className="mt-2",
+                        ),
                     ], width=6),
                 ]),
             ], id="div-hero", className="wash-neutral p-4 mb-3"),
@@ -345,6 +351,169 @@ def build_layout():
                                    tooltip={"placement": "bottom", "template": "{value}%"}),
                     ], id="block-g2"),
                 ], id="collapse-guardrails", is_open=False),
+
+                # Withdrawal strategy panel (PRD two_bucket_retirement_strategy §12.2)
+                dbc.Button("Withdrawal strategy", id="btn-withdrawal-strategy-header",
+                           color="outline-secondary", className="mb-2"),
+                dbc.Collapse([
+                    dbc.RadioItems(
+                        id="radio-withdrawal-strategy",
+                        options=[
+                            {"label": " Single portfolio", "value": "single_portfolio"},
+                            {"label": " Growth + spending reserve (two-bucket)", "value": "two_bucket"},
+                        ],
+                        value="single_portfolio",
+                    ),
+                    html.Small(
+                        "Single portfolio: the whole balance is invested in one growth stream, as "
+                        "elsewhere in this tool. Growth + spending reserve: splits the portfolio into "
+                        "a market-exposed growth bucket and a separate reserve that funds withdrawals "
+                        "during down markets, refilled from growth in good years.",
+                        className="text-muted d-block mt-1",
+                    ),
+                    html.Small(
+                        "In historic-scenario runs, growth follows the actual historic returns for "
+                        "that stress period; the reserve's return is always the configured assumption "
+                        "below, not historical — its historic path doesn't exist.",
+                        className="text-muted d-block mt-1",
+                    ),
+                    html.Div([
+                        dbc.Row([
+                            dbc.Col(dbc.Card(dbc.CardBody([
+                                html.H6("Reserve size"),
+                                html.Div("Target years of spending:"),
+                                html.Small(
+                                    "How much of the forecast portfolio-funded gap (spending the "
+                                    "portfolio must cover after income) the reserve is sized to hold, "
+                                    "in years.",
+                                    className="text-muted d-block",
+                                ),
+                                dbc.Input(id="slider-wd-target-years", type="number", step=0.5, value=4.0),
+                                html.Div("Refill trigger (years):", className="mt-2"),
+                                html.Small(
+                                    "Reserve trigger: once the reserve falls below this many years of "
+                                    "the gap, a refill from growth is considered.",
+                                    className="text-muted d-block",
+                                ),
+                                dbc.Input(id="slider-wd-trigger-years", type="number", step=0.5, value=3.0),
+                                html.Div("Coverage scope:", className="mt-2"),
+                                html.Small(
+                                    "Which planned cash flows count toward the reserve's forward-looking "
+                                    "target size. Recurring only: everyday spending. + gifts: adds "
+                                    "scheduled gift payments. All planned outflows: adds lump sums too — "
+                                    "the reserve target rises before a scheduled spending increase "
+                                    "arrives, since it looks ahead the full target-years window.",
+                                    className="text-muted d-block",
+                                ),
+                                dcc.Dropdown(id="dd-wd-coverage-scope", clearable=False, options=[
+                                    {"label": "Recurring spending only", "value": "recurring_gap_only"},
+                                    {"label": "Recurring + scheduled gifts", "value": "recurring_plus_scheduled_gifts"},
+                                    {"label": "All planned outflows", "value": "all_planned_outflows"},
+                                ], value="recurring_gap_only"),
+                            ])), width=3),
+                            dbc.Col(dbc.Card(dbc.CardBody([
+                                html.H6("Reserve investment assumptions"),
+                                html.Div("Distribution:"),
+                                html.Small(
+                                    "How the reserve's return is sampled each period, independent of "
+                                    "the growth bucket's market model. Constant: always exactly the mean "
+                                    "below. Normal / Student-t: random each period; Student-t adds fatter "
+                                    "tails (more extreme periods) via the degrees-of-freedom setting.",
+                                    className="text-muted d-block",
+                                ),
+                                dcc.Dropdown(id="dd-wd-distribution", clearable=False, options=[
+                                    {"label": "Constant", "value": "constant"},
+                                    {"label": "Normal", "value": "normal"},
+                                    {"label": "Student-t", "value": "student_t"},
+                                ], value="normal"),
+                                html.Div("Expected real return (%):", className="mt-2"),
+                                html.Small(
+                                    "Real return: the reserve's assumed growth rate net of inflation, "
+                                    "sampled independently each period from the distribution above — "
+                                    "not drawn from the market model used for the growth bucket.",
+                                    className="text-muted d-block",
+                                ),
+                                dbc.Input(id="inp-wd-mean-real", type="number", step=0.1, value=1.0),
+                                html.Div("Std dev, real (%):", className="mt-2"),
+                                html.Small(
+                                    "How much the reserve's return varies period to period around the "
+                                    "mean above. Ignored when Distribution is Constant.",
+                                    className="text-muted d-block",
+                                ),
+                                dbc.Input(id="inp-wd-std-real", type="number", step=0.1, value=3.0),
+                                html.Div([
+                                    html.Div("Student-t degrees of freedom:", className="mt-2"),
+                                    html.Small(
+                                        "Lower values (e.g. 3-5) mean fatter tails — more frequent "
+                                        "extreme returns — than Normal. Higher values converge toward "
+                                        "Normal.",
+                                        className="text-muted d-block",
+                                    ),
+                                    dbc.Input(id="inp-wd-df", type="number", step=1, value=5),
+                                ], id="div-wd-df-block", style={"display": "none"}),
+                            ])), width=3),
+                            dbc.Col(dbc.Card(dbc.CardBody([
+                                html.H6("Draw policy"),
+                                html.Div("Growth funds withdrawals when its trailing real return is at/above (%):"),
+                                html.Small(
+                                    "Below this threshold, growth is in a down market and spending "
+                                    "draws from the reserve instead. If the reserve is empty when that "
+                                    "happens, growth funds it anyway — a forced growth sale.",
+                                    className="text-muted d-block",
+                                ),
+                                dbc.Input(id="inp-wd-draw-threshold", type="number", step=0.1, value=0.0),
+                                html.Div("First-period funding source:", className="mt-2"),
+                                html.Small(
+                                    "Only matters for the very first simulated period, since there's no "
+                                    "prior return yet to judge growth as favorable or not. Every later "
+                                    "period is decided by the threshold above instead.",
+                                    className="text-muted d-block",
+                                ),
+                                dcc.Dropdown(id="dd-wd-first-period-source", clearable=False, options=[
+                                    {"label": "Reserve", "value": "reserve"},
+                                    {"label": "Growth", "value": "growth"},
+                                ], value="reserve"),
+                            ])), width=3),
+                            dbc.Col(dbc.Card(dbc.CardBody([
+                                html.H6("Refill policy"),
+                                html.Div("Eligibility:"),
+                                html.Small(
+                                    "When a refill from growth to the reserve is allowed (only "
+                                    "considered once the reserve is below its trigger, at left). "
+                                    "Threshold rule: only after a growth return at/above the % below. "
+                                    "Always: refill whenever below trigger, regardless of performance. "
+                                    "Never: the reserve is never topped up after its initial funding.",
+                                    className="text-muted d-block",
+                                ),
+                                dcc.Dropdown(id="dd-wd-refill-eligibility", clearable=False, options=[
+                                    {"label": "Growth return at/above threshold", "value": "growth_return_at_or_above_threshold"},
+                                    {"label": "Always", "value": "always"},
+                                    {"label": "Never", "value": "never"},
+                                ], value="growth_return_at_or_above_threshold"),
+                                html.Div("Threshold (%):", className="mt-2"),
+                                html.Small(
+                                    "Used only when Eligibility is the threshold rule: growth's trailing "
+                                    "real return must be at/above this to allow a refill.",
+                                    className="text-muted d-block",
+                                ),
+                                dbc.Input(id="inp-wd-refill-threshold", type="number", step=0.1, value=0.0),
+                                html.Div("Amount rule:", className="mt-2"),
+                                html.Small(
+                                    "How much to transfer on an eligible refill. Top up to target: "
+                                    "fully restores the reserve to its current target in one transfer. "
+                                    "Gains only: caps the transfer at growth's own gains, never sells "
+                                    "into its principal. None: eligibility is checked but nothing moves.",
+                                    className="text-muted d-block",
+                                ),
+                                dcc.Dropdown(id="dd-wd-refill-amount-rule", clearable=False, options=[
+                                    {"label": "Top up to target", "value": "to_target"},
+                                    {"label": "Gains only", "value": "gains_only"},
+                                    {"label": "None", "value": "none"},
+                                ], value="to_target"),
+                            ])), width=3),
+                        ], className="g-2 mt-1"),
+                    ], id="div-two-bucket-cards", style={"display": "none"}),
+                ], id="collapse-withdrawal-strategy", is_open=False),
 
         ]), id="div-view-plan", style={"display": "none"}),
 

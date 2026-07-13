@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 from typing import Dict, Optional
 
 import numpy as np
@@ -7,6 +8,7 @@ import numpy as np
 from engine.guardrails import (CATEGORIES, build_handlers, calibrate_wealth_needed,
                                compute_guardrail_stats, precompute_pv)
 from engine.params import SimulationParams, aggregate_schedule
+from engine.withdrawal_strategies import TwoBucketStrategy, make_strategy
 
 
 ###############################################################################
@@ -182,7 +184,6 @@ def run_simulation(params: SimulationParams, guardrails: Optional[list] = None) 
 
     bal_over_time = np.full((n_periods, params.n_paths), 0.0)
     prop_over_time = np.full((n_periods, params.n_paths), 0.0)
-    bal = np.full(params.n_paths, params.initial_portfolio)
     ruined = np.zeros(params.n_paths, dtype=bool)
     ruin_time = np.full(params.n_paths, -1)
 
@@ -205,11 +206,46 @@ def run_simulation(params: SimulationParams, guardrails: Optional[list] = None) 
     prop_ret = [rng.normal(prop_growth_mean[j], prop_growth_sd[j], size=(params.n_paths, n_periods))
                for j in range(len(params.properties))]
 
+    # PRD §8.3: constructed here (after port_ret AND property-return sampling,
+    # before any other RNG use) so single-mode init is value-neutral relative
+    # to the old `bal = np.full(...)` line — no RNG is consumed by strategy
+    # construction, so moving it does not shift the RNG sequence. Two-bucket
+    # mode's reserve-return sampling (PRD §5.5) uses its own independently
+    # derived generator and never touches `rng`, so its position here (before
+    # or after property sampling) cannot shift port_ret/prop_ret either way —
+    # placed after regardless, per the PRD's RNG-order-sacred discipline.
+    # Single mode computes and samples NONE of the two-bucket-only work below.
+    strategy_kwargs = {}
+    if params.withdrawal_strategy is not None and params.withdrawal_strategy.type == "two_bucket":
+        from engine.withdrawal_strategies import planned_gap_schedule, sample_reserve_returns
+        wcfg = params.withdrawal_strategy
+        planned_gap = planned_gap_schedule(
+            spend_strict=spend_by_cat["strict"],
+            spend_lifestyle=spend_by_cat["lifestyle"],
+            spend_gifts=spend_by_cat["gifts"],
+            lump_out_by_cat=lump_out_by_cat,
+            playground_out=playground_out,
+            incomes=incomes,
+            rent_by_period=rent_by_period,
+            lump_in=lump_in,
+            playground_in=playground_in,
+            coverage_scope=wcfg.reserve.coverage_scope,
+        )
+        reserve_ret = sample_reserve_returns(
+            wcfg.reserve.return_model, params.n_paths, n_periods, params.random_seed, params.annual)
+        strategy_kwargs = {"reserve_ret": reserve_ret, "planned_gap": planned_gap}
+    strategy = make_strategy(params, port_ret, **strategy_kwargs)
+
     mean_wr_list, max_wr_list, mean_withdraw_val_list = [], [], []
 
+    # PRD §8.4: per-period order is guardrail multiplier -> cash flow ->
+    # ruin check -> returns -> end_of_period/record. Balance handling is
+    # delegated to `strategy` (PRD §8.3 call-site mapping); the loop still
+    # owns ruin bookkeeping (`ruined`/`ruin_time`) since it feeds ruin
+    # distributions, ruin tracks, and confidence calibration.
     for i, period in enumerate(periods):
         age = ages[i]
-        start_bal = bal.copy()
+        start_bal = strategy.combined_balance().copy()
         cash_delta = incomes[i] - bands_total[i]
 
         rent_i = 0.0
@@ -225,16 +261,16 @@ def run_simulation(params: SimulationParams, guardrails: Optional[list] = None) 
         # never scaled.
         mult = np.ones(params.n_paths)
         for h in handlers:
-            # `bal` here is still the start-of-period balance (mutated below),
+            # start-of-period combined balance (mutated below via strategy),
             # matching the funded-ratio formula's "portfolio before this year's
             # withdrawal" convention (PRD §3.3.2).
-            mult *= h.multiplier(i, port_ret, params.n_paths, bal=bal)
+            mult *= h.multiplier(i, port_ret, params.n_paths, bal=strategy.combined_balance())
         outflow = strict_out[i] + disc_out[i] * mult
         cash_delta_bal = incomes[i] + rent_i + lump_in[i] - outflow
         for h in handlers:
             h.adjustments.append(disc_out[i] * (mult - 1.0))
 
-        bal = bal + cash_delta_bal
+        strategy.apply_cashflow(i, cash_delta_bal)
 
         # withdrawal/wrate stats exclude lumps and guardrail scaling,
         # matching the original engine's cash-flow-only definition of
@@ -247,12 +283,15 @@ def run_simulation(params: SimulationParams, guardrails: Optional[list] = None) 
         max_wr_list.append(wrate.max())
         mean_withdraw_val_list.append(withdraw_vals.mean())
 
-        just_ruined = (bal <= 0) & (~ruined)
+        combined = strategy.combined_balance()
+        just_ruined = (combined <= 0) & (~ruined)
         ruin_time[just_ruined] = period
-        ruined |= bal <= 0
-        bal[ruined] = 0.0
-        bal[~ruined] *= (1 + port_ret[~ruined, i])
-        bal_over_time[i, :] = bal.copy()
+        ruined |= combined <= 0
+        strategy.mark_ruined(ruined)
+        strategy.apply_returns(i, ~ruined)
+        strategy.end_of_period(i, ~ruined)
+        strategy.record(i)
+        bal_over_time[i, :] = strategy.combined_balance().copy()
 
         for j, p in enumerate(params.properties):
             start_period = p.start_age if params.annual else p.start_age * 12
@@ -263,7 +302,7 @@ def run_simulation(params: SimulationParams, guardrails: Optional[list] = None) 
         prop_over_time[i, :] = np.sum(prop_vals, axis=0)
 
     prop_tot = sum(prop_vals) if params.properties else np.zeros(params.n_paths)
-    estate = bal + prop_tot
+    estate = strategy.combined_balance() + prop_tot
 
     ruin_tracks_log = []
     time_key = "ruin_year" if params.annual else "ruin_month"
@@ -285,12 +324,13 @@ def run_simulation(params: SimulationParams, guardrails: Optional[list] = None) 
             "p90": np.percentile(hist, 90, axis=1),
         }
 
-    return {
-        "summary": _summary_percentiles(bal, prop_tot, estate, ruined),
+    final_bal = strategy.combined_balance()
+    results = {
+        "summary": _summary_percentiles(final_bal, prop_tot, estate, ruined),
         "baseline_summary": baseline_summary,  # set when a calibration pass ran
         "guardrail_mult_percentiles": mult_percentiles,
         "guardrail_stats": compute_guardrail_stats(handlers),
-        "final_portfolio": bal,
+        "final_portfolio": final_bal,
         "final_property": prop_tot,
         "estate_total": estate,
         "mean_withdraw_rate": np.array(mean_wr_list),
@@ -307,6 +347,8 @@ def run_simulation(params: SimulationParams, guardrails: Optional[list] = None) 
         "estate_final": estate,
         "ruin_tracks_log": ruin_tracks_log,
     }
+    results.update(strategy.extra_results())
+    return results
 
 
 ###############################################################################
@@ -333,6 +375,10 @@ def run_historic_scenario(params: SimulationParams, real_factors, property_facto
     lump_map: dict = {}
     for lump in params.lumps:
         lump_map[lump.age] = lump_map.get(lump.age, 0) + lump.amount
+
+    if params.withdrawal_strategy is not None and params.withdrawal_strategy.type == "two_bucket":
+        return _run_historic_two_bucket(params, real_factors, property_factors, ages,
+                                         n_historic, mean_factor, spend_fn, income_fn, lump_map)
 
     bal = float(params.initial_portfolio)
     ruined = False
@@ -378,4 +424,109 @@ def run_historic_scenario(params: SimulationParams, real_factors, property_facto
         "terminal_portfolio": bal,
         "terminal_property": sum(prop_vals),
         "n_historic_years": n_historic,
+    }
+
+
+def _run_historic_two_bucket(params: SimulationParams, real_factors, property_factors, ages,
+                              n_historic, mean_factor, spend_fn, income_fn, lump_map) -> Dict:
+    """Two-bucket historic path (PRD §6.13): deterministic, n_paths=1, always
+    annual, reusing TwoBucketStrategy. Growth bucket is driven by the same
+    historic real_factors the single-portfolio path uses; the reserve earns
+    its configured ``mean_real`` deterministically every period -- no
+    sampling, regardless of the configured distribution (the UI must state
+    reserve returns are configured, not historical).
+
+    Judgment call: mirrors ONLY the cash-flow components the existing
+    single-portfolio historic path already supports -- total (uncategorized)
+    spend/income, property rent, and lump sums by age. Historic mode has no
+    category split or playground-event distinction, so ``coverage_scope``
+    is not honored here; the reserve target is simply the rolling window of
+    (total planned outflow - total planned inflow), matching the same net
+    cash-flow the loop below already computes.
+    """
+    n_periods = len(ages)
+
+    # Growth bucket return stream: identical derivation to the single-portfolio
+    # path's `pf = real_factors[i] if i < n_historic else mean_factor`.
+    port_ret = np.array([[(float(real_factors[i]) if i < n_historic else mean_factor) - 1.0
+                           for i in range(n_periods)]])
+
+    # Reserve earns its configured mean_real deterministically every period
+    # (PRD §6.13) -- no sampling, regardless of the configured distribution.
+    reserve_mean = params.withdrawal_strategy.reserve.return_model.mean_real
+    reserve_ret = np.full((1, n_periods), reserve_mean)
+
+    # Planned gap per period, from the SAME net-cash-flow components the loop
+    # below computes (spend_fn/income_fn/rent/lump_map); lumps split into
+    # inflow/outflow by sign.
+    outflow = np.array([spend_fn(a) for a in ages], dtype=float)
+    inflow = np.array([income_fn(a) for a in ages], dtype=float)
+    for i, age in enumerate(ages):
+        for p in params.properties:
+            if age >= p.start_age:
+                inflow[i] += p.rent_annual
+    lump_net = np.array([lump_map.get(int(a), 0.0) for a in ages], dtype=float)
+    inflow = inflow + np.maximum(lump_net, 0.0)
+    outflow = outflow + np.maximum(-lump_net, 0.0)
+    planned_gap = np.maximum(outflow - inflow, 0.0)
+
+    strategy_params = dataclasses.replace(params, annual=True)  # historic mode is always annual
+    strategy = TwoBucketStrategy(strategy_params, port_ret, reserve_ret, planned_gap)
+
+    ruined = False
+    ruin_age = None
+    prop_vals = [0.0] * len(params.properties)
+    portfolio_over_time: list = []
+    property_over_time: list = []
+    growth_over_time: list = []
+    reserve_over_time: list = []
+
+    for i, age in enumerate(ages):
+        cash_delta = income_fn(age) - spend_fn(age)
+        for p in params.properties:
+            if age >= p.start_age:
+                cash_delta += p.rent_annual
+        net = cash_delta + lump_map.get(int(age), 0.0)
+
+        strategy.apply_cashflow(i, np.array([net]))
+
+        if not ruined and strategy.combined_balance()[0] <= 0:
+            ruined = True
+            ruin_age = int(age)
+
+        ruined_mask = np.array([ruined])
+        strategy.mark_ruined(ruined_mask)
+        alive_mask = np.array([not ruined])
+        strategy.apply_returns(i, alive_mask)
+        strategy.end_of_period(i, alive_mask)
+        strategy.record(i)
+
+        for j, p in enumerate(params.properties):
+            if age >= p.start_age and prop_vals[j] == 0.0:
+                prop_vals[j] = p.initial_value
+            if prop_vals[j] > 0.0:
+                if property_factors is not None and i < len(property_factors):
+                    prop_vals[j] *= float(property_factors[i])
+                else:
+                    prop_vals[j] *= (1.0 + p.growth_mean)
+
+        portfolio_over_time.append(float(strategy.combined_balance()[0]))
+        growth_over_time.append(float(strategy.growth[0]))
+        reserve_over_time.append(float(strategy.reserve[0]))
+        property_over_time.append(sum(prop_vals))
+
+    return {
+        "ages": ages,
+        "portfolio_over_time": portfolio_over_time,
+        "property_over_time": property_over_time,
+        "growth_over_time": growth_over_time,
+        "reserve_over_time": reserve_over_time,
+        "ruined": ruined,
+        "ruin_age": ruin_age,
+        "terminal_portfolio": float(strategy.combined_balance()[0]),
+        "terminal_property": sum(prop_vals),
+        "final_growth": float(strategy.growth[0]),
+        "final_reserve": float(strategy.reserve[0]),
+        "n_historic_years": n_historic,
+        "withdrawal_strategy_type": "two_bucket",
     }

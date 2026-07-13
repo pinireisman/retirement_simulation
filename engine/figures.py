@@ -27,6 +27,17 @@ from engine.theme import (  # re-exported for compat
     DANGER,
     SUCCESS,
     PRIMARY,
+    SERIES_GROWTH_MEDIAN,
+    SERIES_RESERVE_MEDIAN,
+    SERIES_RESERVE_TARGET,
+    BAND_GROWTH_FILL,
+    BAND_RESERVE_FILL,
+    SERIES_FUNDED_FROM_RESERVE,
+    SERIES_FUNDED_FROM_GROWTH,
+    SERIES_REFILL_PROB,
+    SERIES_FORCED_SALE_PROB,
+    SERIES_RESERVE_DEPLETION_PROB,
+    SERIES_COMPARATOR,
     _shade,
 )
 
@@ -350,6 +361,119 @@ def fig_guardrail_multiplier(results: Dict) -> go.Figure:
         template=PLOTLY_TEMPLATE, height=PANEL_HEIGHT, legend=_PANEL_LEGEND,
         xaxis_title="Age", yaxis_title="Discretionary spending × plan",
         yaxis_tickformat=".0%",
+    )
+    return fig
+
+
+def _two_bucket_ages(results: Dict) -> np.ndarray:
+    params = results["params"]
+    factor = 1 if params.annual else 12.0
+    n = results["growth_over_time"].shape[0]
+    return (np.arange(n) + params.start_age * factor) / factor
+
+
+def fig_bucket_balances(results: Dict) -> go.Figure:
+    """PRD two_bucket_retirement_strategy §12.3 chart 2: growth/reserve
+    median lines with P25-P75 bands, plus the deterministic reserve-target
+    line. Clones fig_guardrail_multiplier's band-chart template."""
+    ages = _two_bucket_ages(results)
+    growth = results["growth_over_time"]
+    reserve = np.clip(results["bal_over_time"] - growth, 0.0, None)
+
+    g05, g25, g_med, g75, g95 = _percentiles(growth)
+    r05, r25, r_med, r75, r95 = _percentiles(reserve)
+
+    fig = go.Figure(data=[
+        go.Scatter(
+            x=np.concatenate([ages, ages[::-1]]), y=np.concatenate([g25, g75[::-1]]),
+            fill="toself", fillcolor=BAND_GROWTH_FILL, line=dict(color="rgba(255,255,255,0)"),
+            name="25-75% growth bucket", hoverinfo="skip",
+        ),
+        go.Scatter(
+            x=np.concatenate([ages, ages[::-1]]), y=np.concatenate([r25, r75[::-1]]),
+            fill="toself", fillcolor=BAND_RESERVE_FILL, line=dict(color="rgba(255,255,255,0)"),
+            name="25-75% reserve bucket", hoverinfo="skip",
+        ),
+        go.Scatter(x=ages, y=g_med, name="Median growth bucket",
+                   line=dict(color=SERIES_GROWTH_MEDIAN, width=2)),
+        go.Scatter(x=ages, y=r_med, name="Median reserve bucket",
+                   line=dict(color=SERIES_RESERVE_MEDIAN, width=2)),
+        go.Scatter(x=ages, y=results["reserve_target_by_period"], name="Reserve target",
+                   line=dict(color=SERIES_RESERVE_TARGET, dash="dot", width=1)),
+    ])
+    fig.update_layout(
+        template=PLOTLY_TEMPLATE, height=PANEL_HEIGHT, legend=_PANEL_LEGEND,
+        xaxis_title="Age", yaxis_title="₪ balance (real)",
+    )
+    return fig
+
+
+def fig_funding_source(results: Dict) -> go.Figure:
+    """PRD §12.3 chart 3: share of each period's funding gap paid from the
+    reserve vs the growth bucket (100% stacked bar; periods with no gap are
+    left blank rather than shown as 0/0)."""
+    ages = _two_bucket_ages(results)
+    from_reserve = results["deficit_from_reserve_by_period"]
+    from_growth = results["deficit_from_growth_by_period"]
+    total = from_reserve + from_growth
+    with np.errstate(divide="ignore", invalid="ignore"):
+        reserve_share = np.where(total > 0, from_reserve / total * 100.0, np.nan)
+        growth_share = np.where(total > 0, from_growth / total * 100.0, np.nan)
+
+    fig = go.Figure(data=[
+        go.Bar(x=ages, y=reserve_share, name="Funded from reserve",
+               marker_color=SERIES_FUNDED_FROM_RESERVE),
+        go.Bar(x=ages, y=growth_share, name="Funded from growth",
+               marker_color=SERIES_FUNDED_FROM_GROWTH),
+    ])
+    fig.update_layout(
+        template=PLOTLY_TEMPLATE, height=PANEL_HEIGHT, legend=_PANEL_LEGEND,
+        xaxis_title="Age", yaxis_title="Share of funding gap",
+        yaxis_ticksuffix="%", barmode="stack",
+    )
+    return fig
+
+
+def fig_strategy_events(results: Dict) -> go.Figure:
+    """PRD §12.3 chart 4: per-period probability of a refill, a reserve
+    depletion, and a forced down-market growth sale."""
+    ages = _two_bucket_ages(results)
+    fig = go.Figure(data=[
+        go.Scatter(x=ages, y=results["refill_probability_by_period"] * 100.0, name="Refill",
+                   line=dict(color=SERIES_REFILL_PROB, width=2)),
+        go.Scatter(x=ages, y=results["reserve_depletion_probability_by_period"] * 100.0,
+                   name="Reserve depleted", line=dict(color=SERIES_RESERVE_DEPLETION_PROB, width=2)),
+        go.Scatter(x=ages, y=results["forced_sale_probability_by_period"] * 100.0,
+                   name="Forced growth sale", line=dict(color=SERIES_FORCED_SALE_PROB, width=2)),
+    ])
+    fig.update_layout(
+        template=PLOTLY_TEMPLATE, height=PANEL_HEIGHT, legend=_PANEL_LEGEND,
+        xaxis_title="Age", yaxis_title="Probability", yaxis_ticksuffix="%",
+    )
+    return fig
+
+
+def fig_terminal_comparison(results: Dict) -> go.Figure:
+    """PRD §12.3 chart 5: terminal-wealth distribution, two-bucket vs the
+    single-portfolio comparator (comparison mode only, PRD §11). The
+    comparator only ships compact pct25/median/pct75 (build_comparison,
+    webapp/callbacks.py), not raw paths, so it renders as a band+line
+    overlay rather than a second box trace. Never stacked — they are
+    alternative strategies, not additive."""
+    comp_summary = results["comparison"]["summary"]
+
+    fig = go.Figure(data=[
+        go.Box(y=results["final_portfolio"], name="Growth + Spending Reserve",
+               marker_color=SERIES_GROWTH_MEDIAN, boxmean="sd"),
+    ])
+    fig.add_hline(y=comp_summary["portfolio_median"], line_color=SERIES_COMPARATOR, line_width=2,
+                  annotation_text="Single-portfolio median", annotation_position="top left")
+    fig.add_hrect(y0=comp_summary["portfolio_pct25"], y1=comp_summary["portfolio_pct75"],
+                  fillcolor=SERIES_COMPARATOR, opacity=0.12, line_width=0,
+                  annotation_text="Single-portfolio 25-75%", annotation_position="bottom left")
+    fig.update_layout(
+        template=PLOTLY_TEMPLATE, height=PANEL_HEIGHT, legend=_PANEL_LEGEND,
+        yaxis_title="₪ terminal portfolio (real)", showlegend=True,
     )
     return fig
 
