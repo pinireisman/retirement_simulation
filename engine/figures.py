@@ -109,15 +109,17 @@ def build_cash_flow_series(params: SimulationParams, annual=True) \
         arr = np.zeros(n)
         mask = (ages >= band.start * factor) & (ages <= band.end * factor)
         arr[mask] = band.annual / factor
-        series[f"Income · {band.label}"] = arr
-        colors[f"Income · {band.label}"] = _shade(SERIES_INCOME_BASE, i)
+        label = f"Income · {band.label}"
+        series[label] = series.get(label, 0) + arr  # duplicate labels merge into one series
+        colors[label] = _shade(SERIES_INCOME_BASE, i)
 
     # Rent components
     for i, prop in enumerate(params.properties):
         arr = np.zeros(n)
         arr[ages >= prop.start_age * factor] = prop.rent_annual / factor
-        series[f"Rent · {prop.label}"] = arr
-        colors[f"Rent · {prop.label}"] = _shade(SERIES_RENT_BASE, i)
+        label = f"Rent · {prop.label}"
+        series[label] = series.get(label, 0) + arr
+        colors[label] = _shade(SERIES_RENT_BASE, i)
 
     # Spending components (negative values) — colored by category (PRD §6.3)
     cat_counts: dict = {}
@@ -126,7 +128,7 @@ def build_cash_flow_series(params: SimulationParams, annual=True) \
         mask = (ages >= band.start * factor) & (ages <= band.end * factor)
         arr[mask] = -band.annual / factor
         label = f"Spend · {band.label}"
-        series[label] = arr
+        series[label] = series.get(label, 0) + arr
         idx = cat_counts.get(band.category, 0)
         cat_counts[band.category] = idx + 1
         colors[label] = _shade(CATEGORY_COLORS.get(band.category, CATEGORY_COLORS["strict"]), idx)
@@ -137,7 +139,7 @@ def build_cash_flow_series(params: SimulationParams, annual=True) \
         arr = np.zeros(n)
         arr[ages == lp.age * factor] = lp.amount
         label = f"Lump · {lp.label}"
-        series[label] = arr
+        series[label] = series.get(label, 0) + arr
         if lp.playground:
             colors[label] = PLAYGROUND_COLOR  # match the diamond markers
         elif lp.amount < 0:
