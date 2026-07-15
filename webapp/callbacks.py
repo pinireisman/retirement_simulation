@@ -329,19 +329,33 @@ def register_callbacks(app) -> None:
         Input("store-scenario", "data"),
         State("store-hydrate-guard", "data"),
         State("store-dirty", "data"),
+        State("tbl-spending", "data"),
+        State("tbl-income", "data"),
+        State("tbl-lumps", "data"),
+        State("tbl-properties", "data"),
     )
-    def hydrate_tabs(scenario, last_hydrated, dirty):
+    def hydrate_tabs(scenario, last_hydrated, dirty,
+                     cur_spending, cur_income, cur_lumps, cur_properties):
         """Store -> widgets. Guarded against re-triggering on its own echo
         from collect_edits (see module docstring): compares a serialized
         snapshot of the incoming store value against the last one THIS PAGE
         rendered. The guard lives in a memory-type dcc.Store so it dies with
         the page: a server-side guard outlived refreshes and made this
         callback skip the first render of a fresh page (empty tables until
-        something else dirtied the store, e.g. a second Load click)."""
+        something else dirtied the store, e.g. a second Load click).
+
+        Tables additionally diff against their current data and no_update
+        when unchanged: rewriting a dash_table resets any in-progress cell
+        edit (select-all state — backspace then wipes the cell, arrows
+        misbehave), so a table is only rewritten when its content actually
+        changed (load/undo/add-row, or an amount edit refreshing Annual)."""
         scenario = _valid_scenario(scenario)
         snapshot = json.dumps(scenario, sort_keys=True)
         if snapshot == last_hydrated:
             return (no_update,) * 30
+
+        def table_or_skip(new_rows, current_rows):
+            return no_update if new_rows == (current_rows or []) else new_rows
 
         portfolio = scenario["portfolio"]
         name = scenario.get("name", "untitled")
@@ -379,10 +393,10 @@ def register_callbacks(app) -> None:
             portfolio["random_seed"],
             mu_val,
             sigma_val,
-            _with_annual(scenario.get("spending_bands", [])),
-            _with_annual(scenario.get("income_bands", [])),
-            scenario.get("lumps", []),
-            scenario.get("properties", []),
+            table_or_skip(_with_annual(scenario.get("spending_bands", [])), cur_spending),
+            table_or_skip(_with_annual(scenario.get("income_bands", [])), cur_income),
+            table_or_skip(scenario.get("lumps", []), cur_lumps),
+            table_or_skip(scenario.get("properties", []), cur_properties),
             header,
             ws.get("type", "single_portfolio"),
             ws_reserve.get("target_years", 4.0),
