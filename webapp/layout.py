@@ -523,7 +523,9 @@ def build_layout():
 
         # Hidden stores
         dcc.Store(id="store-active-view", storage_type="memory", data="dashboard"),
-        dcc.Store(id="store-scenario", storage_type="session", data=DEFAULT_SCENARIO),
+        dcc.Store(id="store-scenario", storage_type="local", data=DEFAULT_SCENARIO),
+        dcc.Store(id="store-dirty", storage_type="memory", data=False),
+        dcc.Download(id="download-scenario"),
         # localStorage: playground events survive server restarts and plan loads
         dcc.Store(id="store-playground", storage_type="local", data=[]),
         dcc.Store(id="store-guardrails", storage_type="session", data={"guardrails": [
@@ -544,10 +546,7 @@ def build_layout():
             dbc.ModalHeader("Save Scenario"),
             dbc.ModalBody([
                 dbc.Input(id="input-save-name", type="text", placeholder="Scenario name"),
-                html.Div([
-                    dbc.Checkbox(id="chk-overwrite", label="Overwrite existing file"),
-                ], id="div-overwrite-checkbox", style={"display": "none"}),
-                dbc.Button("Save", id="btn-save-confirm", color="primary", className="mt-2"),
+                dbc.Button("Download .xlsx", id="btn-save-confirm", color="primary", className="mt-2"),
             ]),
         ], id="modal-save", is_open=False),
         

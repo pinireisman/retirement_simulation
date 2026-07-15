@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: retirement-simulator
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn webapp.app:server --workers 1 --threads 4 --bind 0.0.0.0:$PORT

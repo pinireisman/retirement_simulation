@@ -45,42 +45,20 @@ def upload_scenario(page: Page, xlsx_path: str) -> None:
     expect_toast(page, "loaded")
 
 
-def save_scenario(page: Page, name: str, overwrite: bool = False) -> str:
-    """Save the current scenario via the Save modal; return the feedback text.
-
-    The overwrite checkbox only appears once a file with this name exists, so
-    it is checked only when visible. On a name conflict without overwrite the
-    app leaves the modal open with a danger toast — the returned text lets the
-    caller assert on that ("exists"/"overwrite") the way a user would read it.
-    """
+def save_scenario(page: Page, name: str):
+    """Save the current scenario via the Save modal; return the triggered
+    browser Download (PRD §3.1 — download, no server-side save)."""
     modal = page.locator("#modal-save")
-    # A prior conflict can leave the modal already open; only then skip re-clicking
-    # Save (btn-save sits behind the modal backdrop). When the modal is closed,
-    # clear any lingering toast first so the text we read back is this save's.
     if not modal.is_visible():
         _dismiss_toast(page)
         page.locator("#btn-save").click()
         expect(modal).to_be_visible()
     page.locator("#input-save-name").fill(name)
-    if overwrite and page.locator("#div-overwrite-checkbox").is_visible():
-        box = page.locator("#chk-overwrite")
-        box.check()
-        # Let the checkbox's value prop sync to Dash's store before the confirm
-        # callback reads it as State (otherwise it reads the old False).
-        expect(box).to_be_checked()
-        page.wait_for_timeout(200)
-    page.locator("#btn-save-confirm").click()
-    # A successful save closes the modal; a conflict/error leaves it open with a
-    # danger toast. Wait for whichever settles so we don't read a stale toast.
-    toast = page.locator("#toast")
-    for _ in range(50):
-        page.wait_for_timeout(100)
-        if not modal.is_visible():
-            break  # saved
-        txt = toast.inner_text().lower() if toast.is_visible() else ""
-        if any(w in txt for w in ("exist", "overwrite", "cannot", "error")):
-            break  # rejected, modal stays open
-    return expect_toast(page)
+    with page.expect_download() as dl_info:
+        page.locator("#btn-save-confirm").click()
+    expect_toast(page, "download")
+    expect(modal).not_to_be_visible()
+    return dl_info.value
 
 
 def scenario_in_load_list(page: Page, name: str) -> bool:

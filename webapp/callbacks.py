@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import dataclasses
+import io
 import json
 import os
 import re
@@ -28,7 +29,7 @@ from tempfile import NamedTemporaryFile
 
 import dash_bootstrap_components as dbc
 import numpy as np
-from dash import ALL, Input, Output, State, ctx, html, no_update
+from dash import ALL, Input, Output, State, ctx, dcc, html, no_update
 
 from engine.figures import (
     PLAYGROUND_COLOR, build_cash_flow_series, net_cash_flow,
@@ -42,6 +43,7 @@ from engine.params import SimulationParams, validate_scenario
 from engine.simulation import run_historic_scenario, run_simulation
 from engine.theme import PLOTLY_TEMPLATE, SERIES_NET_CASH_FLOW, tone_for_ruin
 from webapp.components import build_stat_tile, build_badge_row, build_chart_card
+from webapp.layout import DEFAULT_SCENARIO
 
 _GUARDRAIL_DISPLAY_NAMES = {
     "funded_ratio_guardrail": "Funded ratio guardrail",
@@ -53,16 +55,11 @@ _TONE_COLOR = {"success": "var(--success)", "borderline": "var(--warning)", "dan
 RESULTS_CACHE: "OrderedDict[str, dict]" = OrderedDict()
 _CACHE_SIZE = 5
 
-# Module-level state for the "unsaved changes" header dot. Single-process,
-# single-user app (PRD §3.2). NOTE: the store<->UI hydration guard is NOT kept
-# here — server state outlives page refreshes, which broke first-render
-# hydration; it lives in the memory-type store-hydrate-guard instead.
-_dirty = {"value": False}
-
-
-def mark_clean() -> None:
-    """Called by save/load/upload callbacks after a successful disk round-trip."""
-    _dirty["value"] = False
+def _valid_scenario(blob):
+    """Stale-schema guard: localStorage outlives deploys (PRD §3.3)."""
+    if isinstance(blob, dict) and "portfolio" in blob and blob.get("$schema") == "scenario.v1":
+        return blob
+    return DEFAULT_SCENARIO
 
 
 def _sanitize_name(name: str) -> str:
@@ -331,8 +328,9 @@ def register_callbacks(app) -> None:
         Output("store-hydrate-guard", "data"),
         Input("store-scenario", "data"),
         State("store-hydrate-guard", "data"),
+        State("store-dirty", "data"),
     )
-    def hydrate_tabs(scenario, last_hydrated):
+    def hydrate_tabs(scenario, last_hydrated, dirty):
         """Store -> widgets. Guarded against re-triggering on its own echo
         from collect_edits (see module docstring): compares a serialized
         snapshot of the incoming store value against the last one THIS PAGE
@@ -340,13 +338,14 @@ def register_callbacks(app) -> None:
         the page: a server-side guard outlived refreshes and made this
         callback skip the first render of a fresh page (empty tables until
         something else dirtied the store, e.g. a second Load click)."""
+        scenario = _valid_scenario(scenario)
         snapshot = json.dumps(scenario, sort_keys=True)
         if snapshot == last_hydrated:
             return (no_update,) * 30
 
         portfolio = scenario["portfolio"]
         name = scenario.get("name", "untitled")
-        header = f"{name} •" if _dirty["value"] else name
+        header = f"{name} •" if dirty else name
 
         # Resolve mu/sigma: use explicit values from store, or fall back to
         # the selected market's defaults (same logic as SimulationParams.from_scenario).
@@ -409,6 +408,7 @@ def register_callbacks(app) -> None:
     @app.callback(
         Output("store-scenario", "data", allow_duplicate=True),
         Output("store-undo-stack", "data", allow_duplicate=True),
+        Output("store-dirty", "data", allow_duplicate=True),
         Input("inp-initial-portfolio", "value"),
         Input("inp-start-age", "value"),
         Input("inp-end-age", "value"),
@@ -455,6 +455,8 @@ def register_callbacks(app) -> None:
                        wd_refill_amount_rule, prev_scenario, undo_stack):
         """Widgets -> store. On an add-row button click, appends a default
         row to that band's table before serializing everything back out."""
+        if not isinstance(prev_scenario, dict):
+            prev_scenario = {}
         triggered = ctx.triggered_id
         start_age_i = _num(start_age, int, 60)
         end_age_i = _num(end_age, int, 95)
@@ -567,14 +569,13 @@ def register_callbacks(app) -> None:
                 for i, r in enumerate(properties_rows)
             ],
         }
-        _dirty["value"] = True
 
         triggered_ids = {t["prop_id"].split(".")[0] for t in ctx.triggered}
         new_undo_stack = list(undo_stack or [])
         if (triggered_ids & TABLE_TRIGGER_IDS) and scenario != prev_scenario:
             new_undo_stack = (new_undo_stack + [prev_scenario])[-20:]
 
-        return scenario, new_undo_stack
+        return scenario, new_undo_stack, True
 
     @app.callback(
         Output("store-scenario", "data", allow_duplicate=True),
@@ -837,6 +838,7 @@ def register_callbacks(app) -> None:
         Output("toast", "children"),
         Output("toast", "is_open"),
         Output("toast", "icon"),
+        Output("store-dirty", "data", allow_duplicate=True),
         Input("upload-scenario", "contents"),
         State("upload-scenario", "filename"),
         prevent_initial_call=True,
@@ -845,7 +847,7 @@ def register_callbacks(app) -> None:
         """Upload a scenario from an xlsx file. Playground events persist across loads."""
         try:
             if contents is None or filename is None:
-                return no_update, "No file selected", True, "danger"
+                return no_update, "No file selected", True, "danger", no_update
 
             # Decode base64 content
             content_type, content_string = contents.split(',')
@@ -864,90 +866,64 @@ def register_callbacks(app) -> None:
                 # Set the name from filename (without extension)
                 scenario["name"] = Path(filename).stem
 
-                # Mark as clean
-                mark_clean()
-
                 # Clean up temp file
                 os.unlink(tmp_path)
 
-                return scenario, "Scenario loaded successfully", True, "success"
+                return scenario, "Scenario loaded successfully", True, "success", False
             except Exception as exc:
                 # Clean up temp file on error
                 os.unlink(tmp_path)
-                return no_update, f"Error loading scenario: {str(exc)}", True, "danger"
+                return no_update, f"Error loading scenario: {str(exc)}", True, "danger", no_update
         except Exception as exc:
-            return no_update, f"Error decoding file: {str(exc)}", True, "danger"
+            return no_update, f"Error decoding file: {str(exc)}", True, "danger", no_update
 
     @app.callback(
         Output("toast", "children", allow_duplicate=True),
         Output("toast", "is_open", allow_duplicate=True),
         Output("toast", "icon", allow_duplicate=True),
-        Output("dd-load-scenario", "options", allow_duplicate=True),
+        Output("download-scenario", "data"),
         Output("modal-save", "is_open", allow_duplicate=True),
+        Output("store-dirty", "data", allow_duplicate=True),
         Input("btn-save-confirm", "n_clicks"),
         State("input-save-name", "value"),
-        State("chk-overwrite", "value"),
         State("store-scenario", "data"),
         prevent_initial_call=True,
     )
-    def save_scenario(n_clicks, name, overwrite, scenario):
-        """Save the current scenario to an xlsx file."""
+    def save_scenario(n_clicks, name, scenario):
+        """Download the current scenario as an xlsx file (PRD §3.1: no server-side save)."""
         try:
-            # Sanitize the name
             sanitized_name = _sanitize_name(name or "")
 
             if not sanitized_name:
-                return "Scenario name cannot be empty", True, "danger", no_update, True
+                return "Scenario name cannot be empty", True, "danger", no_update, True, no_update
 
-            # Build path
-            save_path = Path("scenarios") / f"{sanitized_name}.xlsx"
-            
-            # Check if file exists and overwrite is not enabled
-            if save_path.exists() and not overwrite:
-                return "File already exists. Please check 'Overwrite existing file' to proceed.", True, "danger", no_update, True
-            
-            # Save scenario
             from engine.params import scenario_to_xlsx
-            scenario_to_xlsx(scenario, save_path)
-            
-            # Mark as clean
-            mark_clean()
-            
-            # Refresh the scenario list
-            options = _scenario_options()
-            
-            return "Scenario saved successfully", True, "success", options, False
+            buf = io.BytesIO()
+            scenario_to_xlsx(scenario, buf)
+
+            return ("Scenario downloaded", True, "success",
+                    dcc.send_bytes(buf.getvalue(), f"{sanitized_name}.xlsx"), False, False)
         except Exception as exc:
-            return f"Error saving scenario: {str(exc)}", True, "danger", no_update, True
+            return f"Error saving scenario: {str(exc)}", True, "danger", no_update, True, no_update
 
     @app.callback(
         Output("modal-save", "is_open", allow_duplicate=True),
         Output("input-save-name", "value"),
-        Output("div-overwrite-checkbox", "style"),
         Input("btn-save", "n_clicks"),
         State("store-scenario", "data"),
         prevent_initial_call=True,
     )
     def open_save_modal(n_clicks, scenario):
         """Open the save modal with pre-filled name."""
-        # Prefill the name
         name = scenario.get("name", "untitled")
-        
-        # Sanitize the name for filename
-        sanitized_name = _sanitize_name(name)
-        
-        # Check if file already exists
-        save_path = Path("scenarios") / f"{sanitized_name}.xlsx"
-        show_overwrite = save_path.exists()
-        
-        # Return the modal state, name, and overwrite checkbox visibility
-        return True, name, {"display": "block"} if show_overwrite else {"display": "none"}
+        return True, name
 
     @app.callback(
         Output("store-scenario", "data", allow_duplicate=True),
         Output("toast", "children", allow_duplicate=True),
         Output("toast", "is_open", allow_duplicate=True),
         Output("toast", "icon", allow_duplicate=True),
+        Output("store-dirty", "data", allow_duplicate=True),
         Input("btn-load", "n_clicks"),
         State("dd-load-scenario", "value"),
         prevent_initial_call=True,
@@ -956,22 +932,19 @@ def register_callbacks(app) -> None:
         """Load a scenario from an xlsx file. Playground events persist across loads."""
         try:
             if not value:
-                return no_update, "Please select a scenario to load", True, "info"
-            
+                return no_update, "Please select a scenario to load", True, "info", no_update
+
             # Load the scenario from xlsx
             from engine.params import scenario_from_xlsx
             save_path = Path("scenarios") / f"{value}.xlsx"
             scenario = scenario_from_xlsx(save_path)
-            
+
             # Set the name from the value (the dropdown selection)
             scenario["name"] = value
-            
-            # Mark as clean
-            mark_clean()
-            
-            return scenario, "Scenario loaded successfully", True, "success"
+
+            return scenario, "Scenario loaded successfully", True, "success", False
         except Exception as exc:
-            return no_update, f"Error loading scenario: {str(exc)}", True, "danger"
+            return no_update, f"Error loading scenario: {str(exc)}", True, "danger", no_update
 
     @app.callback(
         Output("dd-load-scenario", "options"),

@@ -154,26 +154,34 @@ Pre: fresh. Steps: `upload_scenario(EXAMPLE_XLSX)`; `goto_view("plan")`; per tab
 example_scenario list length. Also `#header-scenario-name` shows the file's scenario
 name. Sev: Blocker. Automated-by: `test_io.py::test_upload_populates_plan`.
 
-**UX-IO-02 — Save creates a loadable scenario.**
-Pre: loaded. Steps: `save_scenario("uxtest-roundtrip")`; `expect_toast("saved")`.
-Expected: toast confirms; scenario appears in the Load dropdown (may need the
-refresh interval — poll up to 5 s). Sev: Blocker.
+**UX-IO-02 — Save downloads a loadable .xlsx.**
+Pre: loaded. Steps: `save_scenario("uxtest-roundtrip")` (modal prompts for filename,
+confirm button labeled "Download .xlsx"). Expected: browser download named
+`uxtest-roundtrip.xlsx`; the engine round-trips it (`scenario_from_xlsx` yields a
+non-empty `portfolio`); nothing is written server-side and the name never appears in
+the Load dropdown (`scenario_in_load_list` is false); `scenarios/` gains no files
+(`no_new_scenario_files` fixture). Sev: Blocker.
 Automated-by: `test_io.py::test_save_creates_scenario`.
 
-**UX-IO-03 — Saving an existing name requires the overwrite checkbox.**
-Pre: loaded, after UX-IO-02. Steps: `save_scenario("uxtest-roundtrip")` again without
-overwrite. Expected: not saved — feedback mentions overwrite/exists; then
-`save_scenario("uxtest-roundtrip", overwrite=True)` succeeds. Sev: Major.
-Automated-by: `test_io.py::test_overwrite_flow`.
+**UX-IO-03 — retired.** Overwrite flow no longer applies: PRD §3.1 removed
+server-side save and the `chk-overwrite` checkbox, so saving is a stateless browser
+download with no name-collision concept to test. ID kept for history;
+was `test_io.py::test_overwrite_flow`.
 
-**UX-IO-04 — Hard refresh + Load restores the plan (PRD §9.2 item 3).**
-Pre: after UX-IO-02. Steps: `page.reload()`; `load_scenario("uxtest-roundtrip")`;
-`goto_view("plan")`. Expected: table row counts match the example scenario again.
+**UX-IO-04 — Dropdown load, localStorage persistence, and corrupt-store fallback
+(PRD §3.3, §6.4).**
+Pre: fresh. Steps: `load_scenario("two_bucket_example")` from the Load dropdown
+(still fed by `scenarios/` in local dev); `goto_view("plan")` and check row counts
+match. Then `open_tab("Portfolio")`, edit `#inp-initial-portfolio`, Tab away, wait for
+the value to land in `localStorage["store-scenario"]`, and `page.reload()`: the edit
+survives with no Load needed. Then corrupt `localStorage["store-scenario"]` with
+invalid JSON and reload: app falls back to the default scenario (portfolio field
+reads "0", `#header-scenario-name` reads "untitled") instead of rendering blank.
 Sev: Blocker. Automated-by: `test_io.py::test_reload_and_load`.
 
 **UX-TOAST-01 — Toast appears bottom-right and auto-dismisses.**
-Pre: loaded. Steps: trigger any toast (e.g. `save_scenario("uxtest-toast",
-overwrite=True)`); read `#toast` `bounding_box()`. Expected: box bottom within 120 px
+Pre: loaded. Steps: trigger any toast (e.g. `save_scenario("uxtest-toast")`); read
+`#toast` `bounding_box()`. Expected: box bottom within 120 px
 of viewport bottom and right within 120 px of viewport right (i.e. never over the
 app bar or form fields); toast gone within 4 s + 1 s tolerance. Sev: Minor.
 Automated-by: `test_io.py::test_toast_position_and_dismiss`.
@@ -247,7 +255,7 @@ artifact. Sev: Blocker when it fires.
 | `test_preview.py` | UX-PREV-01/03 ✅; UX-PREV-02/04 to implement | partial (exemplar) |
 | `test_nav.py` | UX-NAV-01..04, UX-EMPTY-01/02 | to implement |
 | `test_run.py` | UX-RUN-01..04 | to implement |
-| `test_io.py` | UX-IO-01..04, UX-TOAST-01 | to implement |
+| `test_io.py` | UX-IO-01, 02, 04, UX-TOAST-01 (UX-IO-03 retired) | to implement |
 | `test_playground.py` | UX-PG-01..04 | to implement |
 | `test_a11y_misc.py` | UX-A11Y-01/02, UX-RESP-01/02 | to implement |
 

@@ -17,6 +17,7 @@ venv/
 #*.xlsx
 # Personal scenario data
 scenarios/*.xlsx
+!scenarios/scenario_example.xlsx
 
 # UI test run artifacts
 artifacts/
