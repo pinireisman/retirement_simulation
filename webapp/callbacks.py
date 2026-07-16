@@ -965,7 +965,6 @@ def register_callbacks(app) -> None:
         State("store-playground", "data"),
         State("store-guardrails", "data"),
         State("switch-historic", "value"),
-        State("switch-compare-enabled", "value"),
         running=[
             (Output("btn-run", "disabled"), True, False),
             (Output("btn-run-playground", "disabled"), True, False),
@@ -974,12 +973,14 @@ def register_callbacks(app) -> None:
         prevent_initial_call=True,
     )
     def run_simulation_cb(n_run, n_run_pg, scenario, playground_events, guardrail_cfg,
-                           include_historic, compare_enabled):
+                           include_historic):
         """Callback #17. btn-run ignores playground events; btn-run-playground includes them."""
         events = playground_events if ctx.triggered_id == "btn-run-playground" else []
         try:
+            # Comparison UI removed for now (charts need a redesign); the
+            # execute_run harness keeps compare_enabled for its tests/revival.
             run_id, figures, summary, badges, guardrail_stats, baseline_summary = execute_run(
-                scenario, guardrail_cfg, events, bool(include_historic), bool(compare_enabled)
+                scenario, guardrail_cfg, events, bool(include_historic), compare_enabled=False
             )
         except Exception as exc:
             return (no_update,) * 13 + (f"Error running simulation: {exc}", True, "danger")

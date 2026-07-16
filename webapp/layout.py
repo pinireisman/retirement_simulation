@@ -99,12 +99,6 @@ def build_layout():
                             dbc.Switch(id="switch-guardrails-enabled", label="Enable spending guardrails", value=False),
                             className="mt-2",
                         ),
-                        html.Div(
-                            dbc.Switch(id="switch-compare-enabled",
-                                       label="Compare two-bucket strategy to single portfolio",
-                                       value=True),
-                            className="mt-2",
-                        ),
                         # Strategy selection lives here (like the guardrail switch);
                         # its configuration lives in the Plan page tab.
                         html.Div([
