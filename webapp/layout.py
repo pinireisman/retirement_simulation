@@ -86,6 +86,11 @@ def build_layout():
                     dbc.Col([
                         dbc.Button("Run simulation", id="btn-run", color="primary", className="me-2"),
                         dbc.Button("Run with playground events", id="btn-run-playground", color="primary", className="me-2"),
+                        # Shown by run_simulation_cb's `running=` while a run is in flight.
+                        html.Span([
+                            html.Span(className="spinner-border spinner-border-sm me-1", role="status"),
+                            "Running…",
+                        ], id="run-spinner", className="text-primary align-middle", style={"display": "none"}),
                         html.Div(
                             dbc.Switch(id="switch-historic", label="Include historic scenarios", value=False),
                             className="mt-2",
@@ -100,6 +105,20 @@ def build_layout():
                                        value=True),
                             className="mt-2",
                         ),
+                        # Strategy selection lives here (like the guardrail switch);
+                        # its configuration lives in the Plan page tab.
+                        html.Div([
+                            html.Div("Withdrawal strategy", className="small text-muted"),
+                            dbc.RadioItems(
+                                id="radio-withdrawal-strategy",
+                                options=[
+                                    {"label": " Single portfolio", "value": "single_portfolio"},
+                                    {"label": " Growth + spending reserve (two-bucket)", "value": "two_bucket"},
+                                ],
+                                value="single_portfolio",
+                                inline=True,
+                            ),
+                        ], className="mt-2"),
                     ], width=6),
                 ]),
             ], id="div-hero", className="wash-neutral p-4 mb-3"),
@@ -303,17 +322,27 @@ def build_layout():
                             category_col=None
                         ),
                         dbc.Button("Add property", id="btn-add-properties", color="outline-primary", size="sm"),
-                        html.Div("Growth µ/σ follow the scenario's selected market (see Portfolio tab).", 
+                        html.Div("Growth µ/σ follow the scenario's selected market (see Portfolio tab).",
                                 className="small text-muted mt-1"),
                     ], label="Properties", tab_id="tab-properties"),
-                ]),
-                
-                # Guardrails panel — enable/disable lives on the Dashboard
-                # (switch-guardrails-enabled); this panel only configures thresholds.
-                dbc.Button("Guardrails", id="btn-guardrails-header", color="outline-secondary", className="mb-2"),
-                dbc.Collapse([
-                    # Percent units in the UI; collect_guardrails converts to fractions.
-                    html.Div([
+
+                    # Guardrails tab — enable/disable lives on the Dashboard
+                    # (switch-guardrails-enabled); this tab only configures thresholds.
+                    dbc.Tab([
+                        html.Small(
+                            "Spending guardrails adjust your flexible spending each year based on "
+                            "how well-funded the plan is. Every simulated year the plan's funded "
+                            "ratio is checked — your portfolio plus expected future income, versus "
+                            "the cost of all remaining planned spending. If it drops below the lower "
+                            "guardrail, lifestyle and gift spending is trimmed; if it climbs above "
+                            "the upper guardrail, spending is raised to enjoy the surplus. Essential "
+                            "(strict) spending is never touched. The goal: react to bad markets "
+                            "early with small, bounded cuts instead of risking running out — and "
+                            "avoid dying with an unspent fortune when markets do well.",
+                            className="text-muted d-block mt-2",
+                        ),
+                        # Percent units in the UI; collect_guardrails converts to fractions.
+                        html.Div([
                         html.Div("What should the guardrails do for you?", className="mt-2"),
                         dcc.RadioItems(id="dd-g2-goal",
                                        options=[{"label": " Protect the plan", "value": "protect"},
@@ -350,26 +379,24 @@ def build_layout():
                         dcc.Slider(id="slider-g2-discount", min=0, max=4, step=0.25, value=1,
                                    tooltip={"placement": "bottom", "template": "{value}%"}),
                     ], id="block-g2"),
-                ], id="collapse-guardrails", is_open=False),
+                    ], label="Spending Guardrails", tab_id="tab-guardrails"),
 
-                # Withdrawal strategy panel (PRD two_bucket_retirement_strategy §12.2)
-                dbc.Button("Withdrawal strategy", id="btn-withdrawal-strategy-header",
-                           color="outline-secondary", className="mb-2"),
-                dbc.Collapse([
-                    dbc.RadioItems(
-                        id="radio-withdrawal-strategy",
-                        options=[
-                            {"label": " Single portfolio", "value": "single_portfolio"},
-                            {"label": " Growth + spending reserve (two-bucket)", "value": "two_bucket"},
-                        ],
-                        value="single_portfolio",
-                    ),
+                    # Withdrawal strategy tab (PRD two_bucket_retirement_strategy §12.2)
+                    # — strategy selection lives on the Dashboard (radio-withdrawal-strategy);
+                    # this tab only configures the two-bucket parameters.
+                    dbc.Tab([
                     html.Small(
                         "Single portfolio: the whole balance is invested in one growth stream, as "
                         "elsewhere in this tool. Growth + spending reserve: splits the portfolio into "
                         "a market-exposed growth bucket and a separate reserve that funds withdrawals "
                         "during down markets, refilled from growth in good years.",
                         className="text-muted d-block mt-1",
+                    ),
+                    dbc.Alert(
+                        "This tab only configures the two-bucket strategy. Which strategy a run "
+                        "actually uses is chosen on the Dashboard (Withdrawal strategy selector); "
+                        "these settings also drive the two-bucket side of comparison runs.",
+                        color="info", className="py-2 mt-2 mb-0 small",
                     ),
                     html.Small(
                         "In historic-scenario runs, growth follows the actual historic returns for "
@@ -512,9 +539,9 @@ def build_layout():
                                 ], value="to_target"),
                             ])), width=3),
                         ], className="g-2 mt-1"),
-                    ], id="div-two-bucket-cards", style={"display": "none"}),
-                ], id="collapse-withdrawal-strategy", is_open=False),
-
+                    ], id="div-two-bucket-cards"),
+                    ], label="Withdrawal strategy", tab_id="tab-withdrawal-strategy"),
+                ]),
         ]), id="div-view-plan", style={"display": "none"}),
 
         # Theme sync target — clientside_callback repaints Plotly charts into

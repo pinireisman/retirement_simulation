@@ -731,32 +731,6 @@ def register_callbacks(app) -> None:
         return {"guardrails": [g2]}
 
     @app.callback(
-        Output("collapse-guardrails", "is_open"),
-        Input("btn-guardrails-header", "n_clicks"),
-        State("collapse-guardrails", "is_open"),
-        prevent_initial_call=True,
-    )
-    def toggle_guardrail_panel(n_clicks, is_open):
-        """Callback #16."""
-        return not is_open
-
-    @app.callback(
-        Output("collapse-withdrawal-strategy", "is_open"),
-        Input("btn-withdrawal-strategy-header", "n_clicks"),
-        State("collapse-withdrawal-strategy", "is_open"),
-        prevent_initial_call=True,
-    )
-    def toggle_withdrawal_strategy_panel(n_clicks, is_open):
-        return not is_open
-
-    @app.callback(
-        Output("div-two-bucket-cards", "style"),
-        Input("radio-withdrawal-strategy", "value"),
-    )
-    def toggle_two_bucket_cards(wd_type):
-        return {"display": "block"} if wd_type == "two_bucket" else {"display": "none"}
-
-    @app.callback(
         Output("div-wd-df-block", "style"),
         Input("dd-wd-distribution", "value"),
     )
@@ -992,6 +966,11 @@ def register_callbacks(app) -> None:
         State("store-guardrails", "data"),
         State("switch-historic", "value"),
         State("switch-compare-enabled", "value"),
+        running=[
+            (Output("btn-run", "disabled"), True, False),
+            (Output("btn-run-playground", "disabled"), True, False),
+            (Output("run-spinner", "style"), {"display": "inline-block"}, {"display": "none"}),
+        ],
         prevent_initial_call=True,
     )
     def run_simulation_cb(n_run, n_run_pg, scenario, playground_events, guardrail_cfg,

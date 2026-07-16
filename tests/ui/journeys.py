@@ -32,7 +32,7 @@ def goto_view(page: Page, view: str) -> None:
 
 def open_tab(page: Page, tab_name: str) -> None:
     """Open a Plan-view tab by its visible label (Portfolio/Spending/...)."""
-    page.locator(f"#div-view-plan a.nav-link:has-text('{tab_name}')").click()
+    page.locator("#div-view-plan").get_by_role("tab", name=tab_name, exact=True).click()
     expect(page.locator(f"#tbl-{tab_name.lower()}" if tab_name.lower() != "portfolio"
                         else "#inp-initial-portfolio")).to_be_visible()
 
