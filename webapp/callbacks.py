@@ -592,6 +592,35 @@ def register_callbacks(app) -> None:
         return scenario, new_undo_stack, True
 
     @app.callback(
+        Output("tbl-spending", "data", allow_duplicate=True),
+        Output("tbl-income", "data", allow_duplicate=True),
+        Output("tbl-lumps", "data", allow_duplicate=True),
+        Output("tbl-properties", "data", allow_duplicate=True),
+        Input("store-row-move", "data"),
+        State("tbl-spending", "data"),
+        State("tbl-income", "data"),
+        State("tbl-lumps", "data"),
+        State("tbl-properties", "data"),
+        prevent_initial_call=True,
+    )
+    def move_table_row(move, spending, income, lumps, properties):
+        """Apply a row reorder from assets/row-drag.js. Writing the table's
+        `data` re-triggers collect_edits, which persists the new order to
+        store-scenario (and the undo stack) like any other table edit."""
+        tables = OrderedDict([
+            ("tbl-spending", spending), ("tbl-income", income),
+            ("tbl-lumps", lumps), ("tbl-properties", properties),
+        ])
+        rows = tables.get((move or {}).get("table"))
+        frm, to = (move or {}).get("from"), (move or {}).get("to")
+        if (rows is None or not isinstance(frm, int) or not isinstance(to, int)
+                or not (0 <= frm < len(rows)) or not (0 <= to < len(rows)) or frm == to):
+            return (no_update,) * 4
+        rows = list(rows)
+        rows.insert(to, rows.pop(frm))
+        return tuple(rows if tid == move["table"] else no_update for tid in tables)
+
+    @app.callback(
         Output("store-scenario", "data", allow_duplicate=True),
         Output("store-undo-stack", "data", allow_duplicate=True),
         Input("btn-undo", "n_clicks"),

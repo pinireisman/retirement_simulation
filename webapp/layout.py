@@ -561,6 +561,8 @@ def build_layout():
         dcc.Store(id="store-hydrate-guard", storage_type="memory", data=None),
         dcc.Store(id="store-run-id", storage_type="memory", data=None),
         dcc.Store(id="store-undo-stack", storage_type="memory", data=[]),
+        # Written by assets/row-drag.js (long-press row drag): {table, from, to, seq}
+        dcc.Store(id="store-row-move", storage_type="memory", data=None),
         
         # Save modal
         dbc.Modal([

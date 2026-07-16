@@ -56,15 +56,22 @@ def build_data_table(id, columns, category_col=None, **table_kwargs):
             }
         }
     
-    # Build the table with all parameters
+    # Build the table with all parameters. The leading "drag-handle" column
+    # holds no data — assets/row-drag.js drags rows by it, style.css renders
+    # the ⠿ glyph — so it never reaches the scenario store.
     table_config = {
         "id": id,
-        "columns": columns,
+        "columns": [{"name": "", "id": "drag-handle", "editable": False}] + columns,
         "data": [],
         "editable": True,
         "row_deletable": True,
         "style_header": style_header,
         "style_cell": style_cell,
+        "style_cell_conditional": [{
+            "if": {"column_id": "drag-handle"},
+            "width": "28px", "minWidth": "28px", "maxWidth": "28px",
+            "padding": "10px 6px",
+        }],
     }
     
     if style_data_conditional:

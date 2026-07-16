@@ -439,3 +439,41 @@ body {
   line-height: 1;
   text-decoration: none;
 }
+
+/* row-drag.js: drag rows by the ⠿ handle column to reorder */
+td.dash-cell[data-dash-column="drag-handle"] {
+  cursor: grab;
+  touch-action: none; /* the handle owns the gesture, so touch drag works */
+  user-select: none;
+  text-align: center !important;
+}
+td.dash-cell[data-dash-column="drag-handle"]::before {
+  content: "⠿";
+  opacity: 0.45;
+}
+body.row-drag-active {
+  user-select: none;
+  cursor: grabbing;
+}
+body.row-drag-active td.dash-cell[data-dash-column="drag-handle"] {
+  cursor: grabbing;
+}
+tr.row-drag-placeholder td {
+  background-color: var(--md-surface-2) !important;
+  opacity: 0.35;
+}
+table.row-drag-ghost {
+  position: fixed;
+  z-index: 9999;
+  pointer-events: none;
+  border-collapse: collapse;
+  opacity: 0.95;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+table.row-drag-ghost td {
+  font-family: Roboto, sans-serif;
+  padding: 10px 12px;
+  background-color: var(--md-surface-2);
+  color: var(--ink);
+  border: none;
+}
