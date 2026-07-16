@@ -547,8 +547,9 @@ def build_layout():
         dcc.Store(id="store-scenario", storage_type="local", data=DEFAULT_SCENARIO),
         dcc.Store(id="store-dirty", storage_type="memory", data=False),
         dcc.Download(id="download-scenario"),
-        # localStorage: playground events survive server restarts and plan loads
-        dcc.Store(id="store-playground", storage_type="local", data=[]),
+        # sessionStorage: playground events survive a refresh but die with the
+        # tab — "local" made stale events resurface across visits/redeploys
+        dcc.Store(id="store-playground", storage_type="session", data=[]),
         dcc.Store(id="store-guardrails", storage_type="session", data={"guardrails": [
             {"type": "funded_ratio_guardrail", "enabled": False, "mode": "confidence",
              "c_cut": 0.85, "c_target": 0.95, "c_raise": 0.99, "c_severe": 0.80,
